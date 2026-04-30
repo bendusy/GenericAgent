@@ -1,0 +1,48 @@
+# GenericAgent Python Dependencies
+# Auto-generated — run: pip install -r requirements.txt
+
+pillow
+pycryptodome
+qrcode
+beautifulsoup4
+bottle
+markdown
+rapidocr-onnxruntime
+ultralytics
+simple-websocket
+dingtalk-stream
+lark-oapi
+PySide6
+streamlit
+
+# ══════════════════════════════════════════════════════════════
+# Platform-specific (macOS ARM64 — Darwin M4 / Python 3.14)
+# ══════════════════════════════════════════════════════════════
+
+# ✅ Recommended replacements for macOS CLI/headless:
+opencv-python-headless     # opencv-python → headless (no Cocoa/X11 deps on macOS)
+
+# ⚠️  Android only — skip on macOS:
+# pip install uiautomator2   # Android UI automation (requires adb)
+
+# ✅ Native macOS UI automation (use instead of uiautomator2):
+# (system: brew install pomace && pip install pomace2)
+# pip install pyatom         # Alternative: macOS Accessibility GUI
+
+# ⚠️  Linux/Windows only — skip on macOS:
+# pip install pywin32        # Windows GUI automation (win32api/gui/ui)
+
+# ⚠️  yara-python requires brew install yara first (macOS):
+# brew install yara
+# pip install yara            # Process memory scanner (yara-python)
+
+# Optional bots (install as needed):
+# pip install telegram        # Telegram bot
+# pip install botpy           # QQ bot
+# pip install wecom-aibot-sdk # WeChat Work bot
+
+# ══════════════════════════════════════════════════════════════
+# Dev / test tooling
+# ══════════════════════════════════════════════════════════════
+pytest>=8.0
+pytest-mock>=3.12
