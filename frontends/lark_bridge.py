@@ -112,8 +112,8 @@ def install():
     try:
         from ga import GenericAgentHandler
         from agent_loop import StepOutcome
-    except Exception as e:
-        print(f"[fork] lark_bridge install skipped: {e}")
+    except ImportError as e:
+        print(f"[fork] lark_bridge install skipped: {e}", flush=True)
         return
     _StepOutcome = StepOutcome
     if not hasattr(GenericAgentHandler, "do_lark_cli"):
