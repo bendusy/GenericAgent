@@ -597,6 +597,17 @@ def handle_command(open_id, cmd, chat_id=None):
             send_message(open_id, content)
     parts = (cmd or "").split()
     op = (parts[0] if parts else "").lower()
+    # +++ fork anchor #2: route to lark-cli fast-path before native command branches
+    try:
+        from frontends.fsapp_slash_local import dispatch_local_slash
+    except Exception as _e:
+        dispatch_local_slash = None
+        print(f"[fork] slash_local load skipped: {_e}", flush=True)
+    if dispatch_local_slash:
+        _args_str = " ".join(parts[1:]) if len(parts) > 1 else ""
+        if dispatch_local_slash(op, _args_str, _send_cmd_response):
+            return
+    # ---
     if op == "/stop":
         if open_id in user_tasks:
             user_tasks[open_id]["running"] = False
