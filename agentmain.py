@@ -21,6 +21,7 @@ def load_tool_schema(suffix=''):
             TS = json.dumps(json.loads(TS) + json.loads(open(extra, encoding='utf-8').read()))
         except Exception as _e:
             print(f"[fork] tools_schema_local merge skipped: {_e}", flush=True)
+    # lark_bridge import is unconditional: do_lark_cli setattr is safe even without the local schema (just unadvertised). Full rollback: git checkout agentmain.py.
     try:
         import frontends.lark_bridge  # noqa: F401  triggers do_lark_cli injection
     except Exception as _e:

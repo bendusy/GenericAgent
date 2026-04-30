@@ -130,6 +130,20 @@ def test_do_lark_cli_empty_args_returns_error_outcome():
     assert "empty args" in outcome.data.lower()
 
 
+@patch("frontends.lark_bridge.subprocess.run")
+def test_do_lark_cli_appends_doc_url_on_overflow(mock_run):
+    from frontends import lark_bridge as lb
+    from ga import GenericAgentHandler
+    lb.install()
+    big = "x" * (lark_bridge.OVERFLOW_BYTES + 100)
+    upload_resp = json.dumps({"url": "https://example.feishu.cn/docx/xyz"})
+    mock_run.side_effect = [_completed(0, big, ""), _completed(0, upload_resp, "")]
+    handler = GenericAgentHandler.__new__(GenericAgentHandler)
+    outcome = handler.do_lark_cli({"args": ["base", "records", "search"]}, response="")
+    assert "feishu.cn/docx/xyz" in outcome.data
+    assert "完整结果已存为飞书文档" in outcome.data
+
+
 def test_slash_dispatch_unknown_command_returns_false():
     from frontends.fsapp_slash_local import dispatch_local_slash
     sent = []
