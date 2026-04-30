@@ -4,8 +4,10 @@ Adds a `lark_cli` tool to GenericAgentHandler and exposes `run()` for slash
 commands. Stays out of any upstream-maintained file except via two narrow
 anchors documented in docs/FORK_ARCHITECTURE.md.
 """
+import json
 import os
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -34,6 +36,39 @@ def _run_raw(args, jq=None, timeout=DEFAULT_TIMEOUT):
     return p.returncode, p.stdout, p.stderr
 
 
+def _upload_overflow(content: str, title: str) -> Optional[str]:
+    """Upload content as a Lark doc via `lark-cli docs +create` (markdown via stdin).
+
+    Returns the doc URL on success, None on any failure.
+    """
+    md = f"# {title}\n\n```json\n{content}\n```\n"
+    cmd = [LARK_CLI, "docs", "+create",
+           "--title", title,
+           "--markdown", "-",
+           "--format", "json"]
+    try:
+        p = subprocess.run(cmd, input=md, capture_output=True, text=True,
+                           timeout=DEFAULT_TIMEOUT)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    if p.returncode != 0:
+        return None
+    try:
+        body = json.loads(p.stdout)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(body, dict):
+        for key in ("url", "doc_url", "documentUrl"):
+            if body.get(key):
+                return body[key]
+        data = body.get("data") if isinstance(body.get("data"), dict) else None
+        if data:
+            for key in ("url", "doc_url"):
+                if data.get(key):
+                    return data[key]
+    return None
+
+
 def run(args, jq=None, title_hint="lark-cli output", timeout=DEFAULT_TIMEOUT):
     try:
         rc, out, err = _run_raw(args, jq=jq, timeout=timeout)
@@ -45,6 +80,7 @@ def run(args, jq=None, title_hint="lark-cli output", timeout=DEFAULT_TIMEOUT):
         return LarkResult(False, out, "", None, (err or out).strip()[:500])
     if len(out.encode("utf-8")) <= OVERFLOW_BYTES:
         return LarkResult(True, out, out, None, None)
-    # Overflow path filled in Task 3
     head = out[:HEAD_CHARS] + "\n... [truncated, full content in doc] ...\n"
-    return LarkResult(True, out, head, None, None)
+    title = f"{title_hint} {time.strftime('%Y%m%d-%H%M%S')}"
+    doc_url = _upload_overflow(out, title)
+    return LarkResult(True, out, head, doc_url, None)

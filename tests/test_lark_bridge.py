@@ -61,13 +61,37 @@ def test_run_lark_cli_missing(mock_run):
 
 
 @patch("frontends.lark_bridge.subprocess.run")
-def test_run_overflow_truncates_head_and_keeps_full_stdout(mock_run):
+def test_run_overflow_uploads_doc(mock_run):
     big = "x" * (lark_bridge.OVERFLOW_BYTES + 100)
-    mock_run.return_value = _completed(0, big, "")
+    upload_resp = json.dumps({"url": "https://example.feishu.cn/docx/abc"})
+    # First call: original command. Second call: docs +create.
+    mock_run.side_effect = [_completed(0, big, ""), _completed(0, upload_resp, "")]
+    r = lark_bridge.run(["base", "records", "search"], title_hint="base-dump")
+    assert r.ok is True
+    assert r.doc_url == "https://example.feishu.cn/docx/abc"
+    assert r.head.endswith("[truncated, full content in doc] ...\n")
+    upload_call = mock_run.call_args_list[1][0][0]
+    assert upload_call[1:3] == ["docs", "+create"]
+    assert "--title" in upload_call
+    assert "--markdown" in upload_call
+    # markdown content is passed via stdin, so upload_call has "-" placeholder
+    assert "-" in upload_call
+
+
+@patch("frontends.lark_bridge.subprocess.run")
+def test_run_overflow_upload_failure_keeps_head(mock_run):
+    big = "x" * (lark_bridge.OVERFLOW_BYTES + 100)
+    mock_run.side_effect = [_completed(0, big, ""), _completed(1, "", "upload failed")]
     r = lark_bridge.run(["base", "records", "search"])
     assert r.ok is True
-    assert r.stdout == big                # full stdout preserved
-    assert len(r.head) < len(big)         # head is truncated
-    assert r.head.endswith("[truncated, full content in doc] ...\n")
-    assert r.doc_url is None              # Task 3 not yet wired
-    assert r.error is None
+    assert r.doc_url is None
+    assert "[truncated" in r.head
+
+
+@patch("frontends.lark_bridge.subprocess.run")
+def test_run_overflow_upload_bad_json_returns_none_url(mock_run):
+    big = "x" * (lark_bridge.OVERFLOW_BYTES + 100)
+    mock_run.side_effect = [_completed(0, big, ""), _completed(0, "not json", "")]
+    r = lark_bridge.run(["base", "records", "search"])
+    assert r.ok is True
+    assert r.doc_url is None
