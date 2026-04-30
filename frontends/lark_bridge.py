@@ -41,7 +41,7 @@ def _upload_overflow(content: str, title: str) -> Optional[str]:
 
     Returns the doc URL on success, None on any failure.
     """
-    md = f"# {title}\n\n```json\n{content}\n```\n"
+    md = f"# {title}\n\n```\n{content}\n```\n"
     cmd = [LARK_CLI, "docs", "+create",
            "--title", title,
            "--markdown", "-",
@@ -57,15 +57,12 @@ def _upload_overflow(content: str, title: str) -> Optional[str]:
         body = json.loads(p.stdout)
     except json.JSONDecodeError:
         return None
+    # Tolerate top-level or {"data": {...}} envelopes — lark-cli wraps inconsistently.
     if isinstance(body, dict):
-        for key in ("url", "doc_url", "documentUrl"):
-            if body.get(key):
-                return body[key]
-        data = body.get("data") if isinstance(body.get("data"), dict) else None
-        if data:
+        for src in (body, body.get("data") if isinstance(body.get("data"), dict) else {}):
             for key in ("url", "doc_url"):
-                if data.get(key):
-                    return data[key]
+                if src.get(key):
+                    return src[key]
     return None
 
 
@@ -81,6 +78,6 @@ def run(args, jq=None, title_hint="lark-cli output", timeout=DEFAULT_TIMEOUT):
     if len(out.encode("utf-8")) <= OVERFLOW_BYTES:
         return LarkResult(True, out, out, None, None)
     head = out[:HEAD_CHARS] + "\n... [truncated, full content in doc] ...\n"
-    title = f"{title_hint} {time.strftime('%Y%m%d-%H%M%S')}"
+    title = f"{title_hint} {time.strftime('%Y%m%d-%H%M%SZ', time.gmtime())}"
     doc_url = _upload_overflow(out, title)
     return LarkResult(True, out, head, doc_url, None)

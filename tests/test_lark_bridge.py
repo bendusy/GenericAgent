@@ -75,7 +75,7 @@ def test_run_overflow_uploads_doc(mock_run):
     assert "--title" in upload_call
     assert "--markdown" in upload_call
     # markdown content is passed via stdin, so upload_call has "-" placeholder
-    assert "-" in upload_call
+    assert upload_call[upload_call.index("--markdown") + 1] == "-"
 
 
 @patch("frontends.lark_bridge.subprocess.run")
