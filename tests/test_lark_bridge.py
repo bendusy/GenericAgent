@@ -2,8 +2,6 @@ import json
 import subprocess
 from unittest.mock import patch, MagicMock
 
-import pytest
-
 from frontends import lark_bridge
 
 
@@ -60,3 +58,16 @@ def test_run_lark_cli_missing(mock_run):
     r = lark_bridge.run(["calendar", "+agenda"])
     assert r.ok is False
     assert "not found" in r.error.lower()
+
+
+@patch("frontends.lark_bridge.subprocess.run")
+def test_run_overflow_truncates_head_and_keeps_full_stdout(mock_run):
+    big = "x" * (lark_bridge.OVERFLOW_BYTES + 100)
+    mock_run.return_value = _completed(0, big, "")
+    r = lark_bridge.run(["base", "records", "search"])
+    assert r.ok is True
+    assert r.stdout == big                # full stdout preserved
+    assert len(r.head) < len(big)         # head is truncated
+    assert r.head.endswith("[truncated, full content in doc] ...\n")
+    assert r.doc_url is None              # Task 3 not yet wired
+    assert r.error is None

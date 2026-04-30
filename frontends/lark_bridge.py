@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 OVERFLOW_BYTES = 8 * 1024
-HEAD_BYTES = 2000
+HEAD_CHARS = 2000
 DEFAULT_TIMEOUT = 60
 LARK_CLI = os.environ.get("LARK_CLI", "lark-cli")
 
@@ -46,5 +46,5 @@ def run(args, jq=None, title_hint="lark-cli output", timeout=DEFAULT_TIMEOUT):
     if len(out.encode("utf-8")) <= OVERFLOW_BYTES:
         return LarkResult(True, out, out, None, None)
     # Overflow path filled in Task 3
-    head = out[:HEAD_BYTES] + "\n... [truncated, full content in doc] ...\n"
+    head = out[:HEAD_CHARS] + "\n... [truncated, full content in doc] ...\n"
     return LarkResult(True, out, head, None, None)
