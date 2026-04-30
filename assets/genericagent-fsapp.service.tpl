@@ -11,7 +11,7 @@ Restart=on-failure
 RestartSec=30
 StandardOutput=append:{{LOG_DIR}}/fsapp.out.log
 StandardError=append:{{LOG_DIR}}/fsapp.err.log
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PATH={{LARK_BIN_DIR}}:/usr/local/bin:/usr/bin:/bin
 Environment=LARK_CLI={{LARK_CLI_PATH}}
 
 [Install]

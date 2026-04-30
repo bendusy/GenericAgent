@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON="${PYTHON_BIN:-$(command -v python3)}"
 LARK_CLI_PATH="$(command -v lark-cli || true)"
+LARK_BIN_DIR="${LARK_CLI_PATH:+$(dirname "$LARK_CLI_PATH")}"
 LOG_DIR="$REPO/temp/autostart"
 mkdir -p "$LOG_DIR"
 
@@ -41,6 +42,7 @@ render() {
       -e "s|{{REPO}}|$REPO|g" \
       -e "s|{{LOG_DIR}}|$LOG_DIR|g" \
       -e "s|{{LARK_CLI_PATH}}|$LARK_CLI_PATH|g" \
+      -e "s|{{LARK_BIN_DIR}}|$LARK_BIN_DIR|g" \
       "$1"
 }
 

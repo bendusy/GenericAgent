@@ -16,7 +16,7 @@
   <key>StandardErrorPath</key><string>{{LOG_DIR}}/fsapp.err.log</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>{{LARK_BIN_DIR}}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>LARK_CLI</key><string>{{LARK_CLI_PATH}}</string>
   </dict>
   <key>ThrottleInterval</key><integer>30</integer>
