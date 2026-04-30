@@ -1,0 +1,13 @@
+[
+  {"type": "function", "function": {
+    "name": "lark_cli",
+    "description": "Lark/Feishu unified CLI. Use for calendar/base/docs/drive/sheets/wiki/mail/im/task/vc/contact/approval/whiteboard/slides/okr/minutes. Output is JSON. If stdout exceeds 8KB it is auto-uploaded to a Lark cloud doc and the doc URL is appended after a truncated head. Pre-authorized via 'lark-cli auth login'. Examples: args=['calendar','+agenda']; args=['wiki','+search','--query','onboarding']; args=['base','records','search','--params','{\"app_token\":\"xxx\"}','--jq','.items[0:5]'].",
+    "parameters": {"type": "object", "properties": {
+      "args": {"type": "array", "items": {"type": "string"},
+               "description": "lark-cli positional args (do not include 'lark-cli' itself)"},
+      "jq": {"type": "string", "description": "Optional jq filter to shrink JSON output"},
+      "title": {"type": "string", "description": "Title used for the overflow doc; default 'lark-cli'"},
+      "timeout": {"type": "integer", "description": "Seconds, default 60"}
+    }, "required": ["args"]}
+  }}
+]

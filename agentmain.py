@@ -14,6 +14,18 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 def load_tool_schema(suffix=''):
     global TOOLS_SCHEMA
     TS = open(os.path.join(script_dir, f'assets/tools_schema{suffix}.json'), 'r', encoding='utf-8').read()
+    # +++ fork anchor #1: merge fork-local schema (if any) and trigger lark_bridge install
+    extra = os.path.join(script_dir, 'assets/tools_schema_local.json')
+    if os.path.exists(extra):
+        try:
+            TS = json.dumps(json.loads(TS) + json.loads(open(extra, encoding='utf-8').read()))
+        except Exception as _e:
+            print(f"[fork] tools_schema_local merge skipped: {_e}", flush=True)
+    try:
+        import frontends.lark_bridge  # noqa: F401  triggers do_lark_cli injection
+    except Exception as _e:
+        print(f"[fork] lark_bridge load skipped: {_e}", flush=True)
+    # ---
     TOOLS_SCHEMA = json.loads(TS if os.name == 'nt' else TS.replace('powershell', 'bash'))
 load_tool_schema()
 
