@@ -72,10 +72,11 @@ def test_run_overflow_uploads_doc(mock_run):
     assert r.head.endswith("[truncated, full content in doc] ...\n")
     upload_call = mock_run.call_args_list[1][0][0]
     assert upload_call[1:3] == ["docs", "+create"]
+    assert upload_call[upload_call.index("--api-version") + 1] == "v2"
     assert "--title" in upload_call
-    assert "--markdown" in upload_call
-    # markdown content is passed via stdin, so upload_call has "-" placeholder
-    assert upload_call[upload_call.index("--markdown") + 1] == "-"
+    # v2 takes markdown content via --content with stdin "-" + --doc-format markdown
+    assert upload_call[upload_call.index("--content") + 1] == "-"
+    assert upload_call[upload_call.index("--doc-format") + 1] == "markdown"
 
 
 @patch("frontends.lark_bridge.subprocess.run")
@@ -86,6 +87,19 @@ def test_run_overflow_upload_failure_keeps_head(mock_run):
     assert r.ok is True
     assert r.doc_url is None
     assert "[truncated" in r.head
+
+
+@patch("frontends.lark_bridge.subprocess.run")
+def test_run_overflow_upload_extracts_v2_nested_document_url(mock_run):
+    """Lark v2 docs +create returns {data: {document: {url: ...}}} — three-layer envelope."""
+    big = "x" * (lark_bridge.OVERFLOW_BYTES + 100)
+    upload_resp = json.dumps({
+        "ok": True,
+        "data": {"document": {"url": "https://my.feishu.cn/docx/V2NESTED"}}
+    })
+    mock_run.side_effect = [_completed(0, big, ""), _completed(0, upload_resp, "")]
+    r = lark_bridge.run(["base", "records", "search"])
+    assert r.doc_url == "https://my.feishu.cn/docx/V2NESTED"
 
 
 @patch("frontends.lark_bridge.subprocess.run")

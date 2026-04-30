@@ -37,15 +37,16 @@ def _run_raw(args, jq=None, timeout=DEFAULT_TIMEOUT):
 
 
 def _upload_overflow(content: str, title: str) -> Optional[str]:
-    """Upload content as a Lark doc via `lark-cli docs +create` (markdown via stdin).
+    """Upload content as a Lark doc via `lark-cli docs +create` (v2, markdown via stdin).
 
     Returns the doc URL on success, None on any failure.
     """
     md = f"# {title}\n\n```\n{content}\n```\n"
     cmd = [LARK_CLI, "docs", "+create",
+           "--api-version", "v2",
            "--title", title,
-           "--markdown", "-",
-           "--format", "json"]
+           "--content", "-",
+           "--doc-format", "markdown"]
     try:
         p = subprocess.run(cmd, input=md, capture_output=True, text=True,
                            timeout=DEFAULT_TIMEOUT)
@@ -57,9 +58,11 @@ def _upload_overflow(content: str, title: str) -> Optional[str]:
         body = json.loads(p.stdout)
     except json.JSONDecodeError:
         return None
-    # Tolerate top-level or {"data": {...}} envelopes — lark-cli wraps inconsistently.
+    # Tolerate top-level / {"data": {...}} / {"data": {"document": {...}}} envelopes.
     if isinstance(body, dict):
-        for src in (body, body.get("data") if isinstance(body.get("data"), dict) else {}):
+        data = body.get("data") if isinstance(body.get("data"), dict) else {}
+        document = data.get("document") if isinstance(data.get("document"), dict) else {}
+        for src in (body, data, document):
             for key in ("url", "doc_url"):
                 if src.get(key):
                     return src[key]
