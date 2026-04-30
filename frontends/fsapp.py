@@ -55,6 +55,11 @@ def _display_text(text):
     cleaned = _strip_files(_clean(text))
     if cleaned:
         return cleaned
+    # +++ fork anchor #3: meta-only turn — surface <summary> as progress before warning
+    m = re.search(r"<summary>\s*(.*?)\s*</summary>", text or "", re.DOTALL)
+    if m and m.group(1).strip():
+        return f"📌 {m.group(1).strip()}"
+    # ---
     tail = (text or "").strip()[-_TRUNC_TAIL:]
     return "⚠️ 模型输出被截断或为空" + (f"\n…{tail}" if tail else "")
 
