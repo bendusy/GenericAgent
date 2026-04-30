@@ -81,3 +81,43 @@ def run(args, jq=None, title_hint="lark-cli output", timeout=DEFAULT_TIMEOUT):
     title = f"{title_hint} {time.strftime('%Y%m%d-%H%M%SZ', time.gmtime())}"
     doc_url = _upload_overflow(out, title)
     return LarkResult(True, out, head, doc_url, None)
+
+
+# ---- Inject do_lark_cli onto GenericAgentHandler ----
+_StepOutcome = None  # bound during install() to avoid import-order surprises
+
+
+def _do_lark_cli(self, args, response):
+    cli_args = args.get("args") or []
+    if not cli_args:
+        return _StepOutcome("[lark-cli error] empty args", next_prompt="")
+    jq = args.get("jq")
+    title = args.get("title", "lark-cli")
+    try:
+        timeout = int(args.get("timeout", DEFAULT_TIMEOUT))
+    except (TypeError, ValueError):
+        timeout = DEFAULT_TIMEOUT
+    r = run(cli_args, jq=jq, title_hint=title, timeout=timeout)
+    if not r.ok:
+        return _StepOutcome(f"[lark-cli error] {r.error}", next_prompt="")
+    payload = r.head
+    if r.doc_url:
+        payload += f"\n\n[完整结果已存为飞书文档]({r.doc_url})"
+    return _StepOutcome(payload, next_prompt="")
+
+
+def install():
+    """Idempotent: bind StepOutcome and attach do_lark_cli once."""
+    global _StepOutcome
+    try:
+        from ga import GenericAgentHandler
+        from agent_loop import StepOutcome
+    except Exception as e:
+        print(f"[fork] lark_bridge install skipped: {e}")
+        return
+    _StepOutcome = StepOutcome
+    if not hasattr(GenericAgentHandler, "do_lark_cli"):
+        GenericAgentHandler.do_lark_cli = _do_lark_cli
+
+
+install()

@@ -95,3 +95,36 @@ def test_run_overflow_upload_bad_json_returns_none_url(mock_run):
     r = lark_bridge.run(["base", "records", "search"])
     assert r.ok is True
     assert r.doc_url is None
+
+
+def test_install_sets_do_lark_cli_attribute():
+    from frontends import lark_bridge as lb
+    from ga import GenericAgentHandler
+    # Re-run install to ensure idempotent
+    lb.install()
+    assert hasattr(GenericAgentHandler, "do_lark_cli")
+    # Idempotent: second call must not blow up nor rebind to a stale closure
+    method_first = GenericAgentHandler.do_lark_cli
+    lb.install()
+    assert GenericAgentHandler.do_lark_cli is method_first
+
+
+@patch("frontends.lark_bridge.subprocess.run")
+def test_do_lark_cli_returns_step_outcome_with_payload(mock_run):
+    from frontends import lark_bridge as lb
+    from ga import GenericAgentHandler
+    lb.install()
+    mock_run.return_value = _completed(0, '{"ok":true}', "")
+    handler = GenericAgentHandler.__new__(GenericAgentHandler)  # skip __init__
+    outcome = handler.do_lark_cli({"args": ["calendar", "+agenda"]}, response="")
+    # StepOutcome is the upstream dataclass; we just check the data text content.
+    assert '"ok":true' in outcome.data
+
+
+def test_do_lark_cli_empty_args_returns_error_outcome():
+    from frontends import lark_bridge as lb
+    from ga import GenericAgentHandler
+    lb.install()
+    handler = GenericAgentHandler.__new__(GenericAgentHandler)
+    outcome = handler.do_lark_cli({"args": []}, response="")
+    assert "empty args" in outcome.data.lower()
