@@ -5,7 +5,7 @@
   <key>Label</key><string>com.genericagent.fsapp</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{{REPO}}/.venv/bin/python</string>
+    <string>{{PYTHON}}</string>
     <string>{{REPO}}/frontends/fsapp.py</string>
   </array>
   <key>WorkingDirectory</key><string>{{REPO}}</string>

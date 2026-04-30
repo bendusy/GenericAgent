@@ -3,38 +3,30 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
-UV="$(command -v uv || true)"
+PYTHON="${PYTHON_BIN:-$(command -v python3)}"
 LARK_CLI_PATH="$(command -v lark-cli || true)"
 LOG_DIR="$REPO/temp/autostart"
 mkdir -p "$LOG_DIR"
 
 echo "==> repo:    $REPO"
-echo "==> uv:      ${UV:-<not found>}"
+echo "==> python:  ${PYTHON:-<not found>}"
 echo "==> lark:    ${LARK_CLI_PATH:-<not found>}"
 echo "==> logs:    $LOG_DIR"
 
-# Preflight 1: uv installed
-if [[ -z "$UV" ]]; then
-  echo "❌ uv not installed: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+# Preflight 1: python3 found
+if [[ -z "$PYTHON" || ! -x "$PYTHON" ]]; then
+  echo "❌ python3 not found; set PYTHON_BIN env or install python3" >&2
   exit 1
 fi
 
-# Preflight 2: sync venv with frontend extras (network now, not at boot)
-# fsapp.py imports lark_oapi which only lives in the all-frontends extra.
-( cd "$REPO" && "$UV" sync --extra all-frontends )
-VENV_PY="$REPO/.venv/bin/python"
-if [[ ! -x "$VENV_PY" ]]; then
-  echo "❌ uv sync did not produce $VENV_PY" >&2
+# Preflight 2: required imports work from this python (mykeys + lark_oapi)
+if ! "$PYTHON" -c "import sys; sys.path.insert(0,'$REPO'); from llmcore import mykeys; import lark_oapi" 2>&1; then
+  echo "❌ python at $PYTHON cannot import mykeys or lark_oapi" >&2
+  echo "   fix: pip install -r $REPO/requirements.txt   (or uv pip install -r ...)" >&2
   exit 1
 fi
 
-# Preflight 3: mykeys importable from venv
-if ! "$VENV_PY" -c "import sys; sys.path.insert(0,'$REPO'); from llmcore import mykeys" 2>/dev/null; then
-  echo "❌ mykeys.py not configured; copy mykey.py.bak_* to mykeys.py and fill in keys" >&2
-  exit 1
-fi
-
-# Preflight 4: lark-cli authorized
+# Preflight 3: lark-cli authorized
 if [[ -z "$LARK_CLI_PATH" ]]; then
   echo "❌ lark-cli not in PATH; install with 'npm i -g @larksuite/cli'" >&2
   exit 1
@@ -45,7 +37,8 @@ if ! "$LARK_CLI_PATH" doctor >/dev/null 2>&1; then
 fi
 
 render() {
-  sed -e "s|{{REPO}}|$REPO|g" \
+  sed -e "s|{{PYTHON}}|$PYTHON|g" \
+      -e "s|{{REPO}}|$REPO|g" \
       -e "s|{{LOG_DIR}}|$LOG_DIR|g" \
       -e "s|{{LARK_CLI_PATH}}|$LARK_CLI_PATH|g" \
       "$1"

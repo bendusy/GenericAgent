@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory={{REPO}}
-ExecStart={{REPO}}/.venv/bin/python {{REPO}}/frontends/fsapp.py
+ExecStart={{PYTHON}} {{REPO}}/frontends/fsapp.py
 Restart=on-failure
 RestartSec=30
 StandardOutput=append:{{LOG_DIR}}/fsapp.out.log
