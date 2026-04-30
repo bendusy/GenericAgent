@@ -128,3 +128,42 @@ def test_do_lark_cli_empty_args_returns_error_outcome():
     handler = GenericAgentHandler.__new__(GenericAgentHandler)
     outcome = handler.do_lark_cli({"args": []}, response="")
     assert "empty args" in outcome.data.lower()
+
+
+def test_slash_dispatch_unknown_command_returns_false():
+    from frontends.fsapp_slash_local import dispatch_local_slash
+    sent = []
+    handled = dispatch_local_slash("/nope", "", sent.append)
+    assert handled is False
+    assert sent == []
+
+
+@patch("frontends.fsapp_slash_local.run")
+def test_slash_dispatch_cal_invokes_calendar_agenda(mock_run):
+    from frontends.fsapp_slash_local import dispatch_local_slash
+    mock_run.return_value = lark_bridge.LarkResult(True, '{"events":[]}', '{"events":[]}', None, None)
+    sent = []
+    handled = dispatch_local_slash("/cal", "", sent.append)
+    assert handled is True
+    assert mock_run.call_args[0][0] == ["calendar", "+agenda"]
+    assert sent and '"events"' in sent[0]
+
+
+@patch("frontends.fsapp_slash_local.run")
+def test_slash_dispatch_wiki_requires_query(mock_run):
+    from frontends.fsapp_slash_local import dispatch_local_slash
+    sent = []
+    handled = dispatch_local_slash("/wiki", "", sent.append)
+    assert handled is True
+    assert mock_run.called is False
+    assert "用法" in sent[0] or "usage" in sent[0].lower()
+
+
+@patch("frontends.fsapp_slash_local.run")
+def test_slash_dispatch_appends_doc_url_when_overflow(mock_run):
+    from frontends.fsapp_slash_local import dispatch_local_slash
+    mock_run.return_value = lark_bridge.LarkResult(
+        True, "x" * 9000, "head...\n... [truncated", "https://feishu/x", None)
+    sent = []
+    dispatch_local_slash("/cal", "", sent.append)
+    assert "https://feishu/x" in sent[0]
