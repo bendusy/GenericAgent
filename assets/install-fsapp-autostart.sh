@@ -19,8 +19,9 @@ if [[ -z "$UV" ]]; then
   exit 1
 fi
 
-# Preflight 2: sync venv (network now, not at boot)
-( cd "$REPO" && "$UV" sync )
+# Preflight 2: sync venv with frontend extras (network now, not at boot)
+# fsapp.py imports lark_oapi which only lives in the all-frontends extra.
+( cd "$REPO" && "$UV" sync --extra all-frontends )
 VENV_PY="$REPO/.venv/bin/python"
 if [[ ! -x "$VENV_PY" ]]; then
   echo "❌ uv sync did not produce $VENV_PY" >&2
