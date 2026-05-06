@@ -8,9 +8,9 @@ Local Anthropic-compatible proxy for GenericAgent NativeClaudeSession.
 
 Privacy: captures are opt-in and redacted by default.
 """
-import os, json, time, uuid, hashlib, re
+import os, json, time, uuid, hashlib, re, subprocess
 from pathlib import Path
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, Optional
 
 try:
     from flask import Flask, request, Response, jsonify
@@ -27,6 +27,31 @@ SAVE_CAPTURE = os.environ.get("SAVE_CAPTURE", "1").lower() in ("1", "true", "yes
 TIMEOUT = float(os.environ.get("UPSTREAM_TIMEOUT", "600"))
 SESSION_ID = os.environ.get("CC_SESSION_ID") or str(uuid.uuid4())
 CCH_SEED = 0x6E52736AC806831E
+USE_CLAUDE_MAX = os.environ.get("USE_CLAUDE_MAX", "1").lower() in ("1", "true", "yes", "on")
+KEYCHAIN_SERVICE = os.environ.get("CLAUDE_KEYCHAIN_SERVICE", "Claude Code-credentials")
+
+
+def _load_claude_max_token() -> Optional[str]:
+    """Read Claude Code OAuth access token from macOS Keychain. Returns None on any failure."""
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-a", os.environ.get("USER", ""), "-s", KEYCHAIN_SERVICE, "-w"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode != 0:
+            return None
+        data = json.loads(out.stdout.strip())
+        tok = data.get("claudeAiOauth", {}).get("accessToken")
+        exp = data.get("claudeAiOauth", {}).get("expiresAt")
+        if tok and isinstance(exp, (int, float)) and exp / 1000 < time.time():
+            print("[claude-max-proxy] WARN: keychain token expired; refresh via `claude` first", flush=True)
+        return tok or None
+    except Exception as e:
+        print(f"[claude-max-proxy] keychain read failed: {e}", flush=True)
+        return None
+
+
+CLAUDE_MAX_TOKEN = _load_claude_max_token() if USE_CLAUDE_MAX else None
 
 app = Flask(__name__)
 
@@ -230,8 +255,12 @@ def _build_headers(in_headers, final_body_bytes: bytes):
         "X-Stainless-Arch": TRUE_CC_HEADERS.get("X-Stainless-Arch") or TRUE_CC_HEADERS.get("x-stainless-arch") or "arm64",
         "X-Stainless-Runtime": TRUE_CC_HEADERS.get("X-Stainless-Runtime") or TRUE_CC_HEADERS.get("x-stainless-runtime") or "node",
     }
-    if in_headers.get("x-api-key"): h["x-api-key"] = in_headers.get("x-api-key")
-    if in_headers.get("authorization"): h["authorization"] = in_headers.get("authorization")
+    if CLAUDE_MAX_TOKEN:
+        # Override inbound credentials with Claude Max OAuth token from Keychain.
+        h["authorization"] = f"Bearer {CLAUDE_MAX_TOKEN}"
+    else:
+        if in_headers.get("x-api-key"): h["x-api-key"] = in_headers.get("x-api-key")
+        if in_headers.get("authorization"): h["authorization"] = in_headers.get("authorization")
     return h
 
 
@@ -258,7 +287,7 @@ def _remap_sse_lines(lines: Iterable[bytes]):
 
 @app.get("/")
 def home():
-    return jsonify({"ok": True, "service": "claude-max-proxy", "port": PORT, "upstream": UPSTREAM, "dry_run": DRY_RUN, "session_id": SESSION_ID})
+    return jsonify({"ok": True, "service": "claude-max-proxy", "port": PORT, "upstream": UPSTREAM, "dry_run": DRY_RUN, "session_id": SESSION_ID, "auth": "keychain-oauth" if CLAUDE_MAX_TOKEN else "passthrough"})
 
 @app.post("/v1/messages")
 @app.post("/messages")
@@ -290,5 +319,5 @@ def messages():
     return Response(_remap_json_bytes(r.content), status=r.status_code, headers=resp_headers, content_type=r.headers.get("content-type", "application/json"))
 
 if __name__ == "__main__":
-    print(f"[claude-max-proxy] port={PORT} upstream={UPSTREAM} dry_run={DRY_RUN} session={SESSION_ID}", flush=True)
+    print(f"[claude-max-proxy] port={PORT} upstream={UPSTREAM} dry_run={DRY_RUN} session={SESSION_ID} auth={'keychain-oauth' if CLAUDE_MAX_TOKEN else 'passthrough'}", flush=True)
     app.run(host="127.0.0.1", port=PORT, threaded=True)
