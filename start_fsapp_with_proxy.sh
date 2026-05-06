@@ -6,6 +6,7 @@ cd "$(dirname "$0")"
 
 : "${PORT:=5678}"
 : "${DRY_RUN:=0}"
+: "${CC_MODEL:=claude-opus-4-7}"
 LOG="/tmp/claude-proxy.log"
 
 cleanup() {
@@ -20,9 +21,9 @@ if lsof -i ":$PORT" -t >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "[launcher] starting proxy (PORT=$PORT DRY_RUN=$DRY_RUN) -> $LOG"
-PORT="$PORT" DRY_RUN="$DRY_RUN" nohup ./claude-max-proxy/start_proxy.sh \
-  > "$LOG" 2>&1 &
+echo "[launcher] starting proxy (PORT=$PORT DRY_RUN=$DRY_RUN CC_MODEL=$CC_MODEL) -> $LOG"
+PORT="$PORT" DRY_RUN="$DRY_RUN" CC_MODEL="$CC_MODEL" \
+  nohup ./claude-max-proxy/start_proxy.sh > "$LOG" 2>&1 &
 PROXY_PID=$!
 
 for _ in $(seq 1 15); do
