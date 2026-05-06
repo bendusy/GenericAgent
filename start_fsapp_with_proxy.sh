@@ -41,4 +41,7 @@ echo "[launcher] proxy up: $(curl -s http://127.0.0.1:$PORT/)"
 echo "[launcher] launching fsapp (Ctrl+C to stop both)"
 echo "----------------------------------------------------------------"
 
-GA_CLAUDE_PROXY_URL="http://127.0.0.1:$PORT" exec python3 frontends/fsapp.py
+: "${GA_LLM_NOS:=opus-4-7,sonnet,opus-4-6,gpt}"
+echo "[launcher] GA_LLM_NOS=$GA_LLM_NOS"
+GA_CLAUDE_PROXY_URL="http://127.0.0.1:$PORT" GA_LLM_NOS="$GA_LLM_NOS" \
+  exec python3 frontends/fsapp.py

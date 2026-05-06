@@ -20,6 +20,15 @@ def reload_mykeys():
     if mt == _mykey_mtime: return globals().get('mykeys', {}), False
     mk = _load_mykeys(); _mykey_mtime = os.stat(_mykey_path).st_mtime_ns
     print(f'[Info] Load mykeys from {_mykey_path}')
+    # Optional GA_LLM_NOS override: comma-separated session names override every
+    # mixin_config['llm_nos']. Example: GA_LLM_NOS=opus-4-7,sonnet
+    _ga_llm_nos = os.environ.get('GA_LLM_NOS', '').strip()
+    if _ga_llm_nos:
+        _override = [s.strip() for s in _ga_llm_nos.split(',') if s.strip()]
+        for _k, _v in mk.items():
+            if 'mixin' in _k and isinstance(_v, dict) and 'llm_nos' in _v:
+                _v['llm_nos'] = _override
+                print(f'[Info] GA_LLM_NOS override {_k}.llm_nos -> {_override}')
     globals().update(mykeys=mk)
     if mk.get('langfuse_config'):
         try: from plugins import langfuse_tracing
