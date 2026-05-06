@@ -229,14 +229,44 @@ def _normalize_body(body: dict) -> dict:
     body["model"] = os.environ.get("CC_MODEL", "claude-opus-4-6")
     body["max_tokens"] = int(os.environ.get("CC_MAX_TOKENS", "64000"))
     body.setdefault("stream", True)
-    body["thinking"] = {"type": os.environ.get("CC_THINKING_TYPE", "adaptive")}
-    body["context_management"] = {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
-    body["output_config"] = {"effort": os.environ.get("CC_EFFORT", "max")}
+    # CC-specific request shape; opt-in because OAuth Claude Max auth currently
+    # rejects these fields with HTTP 400 unless paired with the right beta gates.
+    if os.environ.get("CC_INJECT_THINKING", "0").lower() in ("1", "true", "yes", "on"):
+        body["thinking"] = {"type": os.environ.get("CC_THINKING_TYPE", "adaptive")}
+    if os.environ.get("CC_INJECT_CONTEXT_MGMT", "0").lower() in ("1", "true", "yes", "on"):
+        body["context_management"] = {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
+    if os.environ.get("CC_INJECT_OUTPUT_CONFIG", "0").lower() in ("1", "true", "yes", "on"):
+        body["output_config"] = {"effort": os.environ.get("CC_EFFORT", "max")}
     _sync_metadata(body)
     body["system"] = _cc_system_blocks(inbound_system)
     if isinstance(body.get("tools"), list): body["tools"] = _remap_obj(body["tools"], "to_cc")
     if isinstance(body.get("messages"), list): body["messages"] = _remap_obj(body["messages"], "to_cc")
+    _cap_cache_control(body, limit=4)
     return body
+
+
+def _cap_cache_control(body: dict, limit: int = 4) -> None:
+    """Anthropic accepts <=4 blocks with cache_control. Drop excess from messages first
+    (cheapest to recompute), keeping system/tools breakpoints intact."""
+    blocks = []  # (priority, ref_dict) — lower priority dropped first
+    def collect(o, prio):
+        if isinstance(o, dict):
+            if "cache_control" in o:
+                blocks.append((prio, o))
+            for v in o.values():
+                collect(v, prio)
+        elif isinstance(o, list):
+            for v in o:
+                collect(v, prio)
+    collect(body.get("messages"), 0)  # drop these first
+    collect(body.get("tools"), 1)
+    collect(body.get("system"), 2)
+    if len(blocks) <= limit:
+        return
+    blocks.sort(key=lambda x: x[0])
+    drop = len(blocks) - limit
+    for _, blk in blocks[:drop]:
+        blk.pop("cache_control", None)
 
 
 def _build_headers(in_headers, final_body_bytes: bytes):
