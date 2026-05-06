@@ -383,6 +383,15 @@ def _stream_with_retry(sess, url, headers, payload, parse_fn):
                     while True: streamed = True; yield next(gen)
                 except StopIteration as e: return e.value or []
         except (requests.Timeout, requests.ConnectionError) as e:
+            # Proxy fallback: if a local GA proxy is unreachable, swap api_base
+            # to the original upstream and retry without backoff (one-shot).
+            if (isinstance(e, requests.ConnectionError)
+                    and getattr(sess, '_proxy_api_base', None)
+                    and sess.api_base == sess._proxy_api_base):
+                print(f"[WARN] proxy {sess._proxy_api_base} unreachable ({type(e).__name__}); falling back to {sess._origin_api_base}")
+                sess.api_base = sess._origin_api_base
+                url = url.replace(sess._proxy_api_base, sess._origin_api_base, 1)
+                continue
             err = f"!!!Error: {type(e).__name__}"
             if attempt < sess.max_retries:
                 d = _delay(None, attempt)
@@ -518,12 +527,13 @@ def _msgs_claude2oai(messages):
 class BaseSession:
     def __init__(self, cfg):
         self.api_key = cfg['apikey']
-        self.api_base = cfg['apibase'].rstrip('/')
+        self._origin_api_base = cfg['apibase'].rstrip('/')
         # Optional local Claude Code disguise proxy. Disabled by default.
         # Enable per process with: GA_CLAUDE_PROXY_URL=http://127.0.0.1:5678
-        _ga_claude_proxy_url = os.environ.get('GA_CLAUDE_PROXY_URL', '').strip()
-        if _ga_claude_proxy_url:
-            self.api_base = _ga_claude_proxy_url.rstrip('/')
+        _ga_claude_proxy_url = os.environ.get('GA_CLAUDE_PROXY_URL', '').strip().rstrip('/')
+        self._proxy_api_base = _ga_claude_proxy_url or None
+        self.api_base = self._proxy_api_base or self._origin_api_base
+        if self._proxy_api_base:
             print(f"[Info] GA_CLAUDE_PROXY_URL enabled: api_base -> {self.api_base}")
         self.model = cfg.get('model', '')
         self.context_win = cfg.get('context_win', 28000)
