@@ -1,0 +1,11 @@
+{
+  "code_run": "Bash",
+  "file_read": "Read",
+  "file_patch": "Edit",
+  "file_write": "Write",
+  "web_scan": "WebFetch",
+  "web_execute_js": "WebSearch",
+  "update_working_checkpoint": "TodoWrite",
+  "ask_user": "AskUserQuestion",
+  "start_long_term_update": "TaskUpdate"
+}

@@ -510,6 +510,12 @@ class BaseSession:
     def __init__(self, cfg):
         self.api_key = cfg['apikey']
         self.api_base = cfg['apibase'].rstrip('/')
+        # Optional local Claude Code disguise proxy. Disabled by default.
+        # Enable per process with: GA_CLAUDE_PROXY_URL=http://127.0.0.1:5678
+        _ga_claude_proxy_url = os.environ.get('GA_CLAUDE_PROXY_URL', '').strip()
+        if _ga_claude_proxy_url:
+            self.api_base = _ga_claude_proxy_url.rstrip('/')
+            print(f"[Info] GA_CLAUDE_PROXY_URL enabled: api_base -> {self.api_base}")
         self.model = cfg.get('model', '')
         self.context_win = cfg.get('context_win', 28000)
         self.history = []
