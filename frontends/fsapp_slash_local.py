@@ -58,10 +58,28 @@ def _handle_bbs(args, send):
         if not ident.ok:
             send(f"❌ {ident.error}")
             return True
-        send(
-            f"BBS: {settings.base_url}\n"
-            f"调度员: {_DISPATCHER_NAME} (last_id={ident.data.get('last_id', 0)})"
-        )
+        # Pull workers + recent posts for a one-glance overview.
+        authors_r = client._request("GET", "/authors")
+        count_r = client._request("GET", "/count")
+        recent_r = client.list_posts(limit=5)
+
+        lines = [
+            f"BBS: {settings.base_url}",
+            f"调度员: {_DISPATCHER_NAME} (last_id={ident.data.get('last_id', 0)})",
+        ]
+        if count_r.ok:
+            lines.append(f"总帖数: {count_r.data.get('total', '?')}")
+        if authors_r.ok and authors_r.data:
+            others = [a for a in authors_r.data if a != _DISPATCHER_NAME]
+            lines.append(f"参与者({len(authors_r.data)}): " + ", ".join(authors_r.data))
+            if not others:
+                lines.append("⚠️  尚无 worker 在线，启动: python3 agentmain.py --reflect reflect/agent_team_worker_robust.py")
+        if recent_r.ok and recent_r.data:
+            lines.append("\n最近 5 条:")
+            lines.extend(_format_post(p) for p in recent_r.data)
+        elif recent_r.ok:
+            lines.append("（暂无帖子）")
+        send("\n".join(lines))
         return True
 
     if sub == "list":
