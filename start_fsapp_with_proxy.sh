@@ -17,8 +17,21 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if lsof -i ":$PORT" -t >/dev/null 2>&1; then
-  echo "[launcher] port $PORT already in use; aborting" >&2
-  exit 1
+  echo "[launcher] port $PORT busy; killing stale proxy"
+  lsof -i ":$PORT" -t 2>/dev/null | xargs -r kill 2>/dev/null || true
+  sleep 1
+  if lsof -i ":$PORT" -t >/dev/null 2>&1; then
+    echo "[launcher] port $PORT still busy after kill; force-killing"
+    lsof -i ":$PORT" -t 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+    sleep 1
+  fi
+fi
+
+if pgrep -f "frontends/fsapp.py" >/dev/null 2>&1; then
+  echo "[launcher] killing stale fsapp.py"
+  pkill -f "frontends/fsapp.py" 2>/dev/null || true
+  sleep 1
+  pkill -9 -f "frontends/fsapp.py" 2>/dev/null || true
 fi
 
 echo "[launcher] starting proxy (PORT=$PORT DRY_RUN=$DRY_RUN CC_MODEL=$CC_MODEL) -> $LOG"

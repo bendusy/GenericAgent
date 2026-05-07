@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory={{REPO}}
-ExecStart={{PYTHON}} {{REPO}}/frontends/fsapp.py
+ExecStart=/bin/bash {{REPO}}/start_fsapp_with_proxy.sh
 Restart=on-failure
 RestartSec=30
 StandardOutput=append:{{LOG_DIR}}/fsapp.out.log

@@ -5,8 +5,8 @@
   <key>Label</key><string>com.genericagent.fsapp</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{{PYTHON}}</string>
-    <string>{{REPO}}/frontends/fsapp.py</string>
+    <string>/bin/bash</string>
+    <string>{{REPO}}/start_fsapp_with_proxy.sh</string>
   </array>
   <key>WorkingDirectory</key><string>{{REPO}}</string>
   <key>RunAtLoad</key><true/>
@@ -18,6 +18,7 @@
   <dict>
     <key>PATH</key><string>{{LARK_BIN_DIR}}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>LARK_CLI</key><string>{{LARK_CLI_PATH}}</string>
+    <key>USER</key><string>{{USER_NAME}}</string>
   </dict>
   <key>ThrottleInterval</key><integer>30</integer>
 </dict>

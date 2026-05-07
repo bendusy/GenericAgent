@@ -43,8 +43,16 @@ render() {
       -e "s|{{LOG_DIR}}|$LOG_DIR|g" \
       -e "s|{{LARK_CLI_PATH}}|$LARK_CLI_PATH|g" \
       -e "s|{{LARK_BIN_DIR}}|$LARK_BIN_DIR|g" \
+      -e "s|{{USER_NAME}}|$USER|g" \
       "$1"
 }
+
+# Preflight 4: launcher script exists and is executable (drives proxy + fsapp)
+LAUNCHER="$REPO/start_fsapp_with_proxy.sh"
+if [[ ! -x "$LAUNCHER" ]]; then
+  echo "❌ launcher missing or not executable: $LAUNCHER" >&2
+  exit 1
+fi
 
 case "$(uname -s)" in
   Darwin)
