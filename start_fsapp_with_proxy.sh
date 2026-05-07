@@ -7,12 +7,19 @@ cd "$(dirname "$0")"
 : "${PORT:=5678}"
 : "${DRY_RUN:=0}"
 : "${CC_MODEL:=claude-opus-4-7}"
+: "${BBS_PORT:=58800}"
+: "${BBS_ENABLE:=1}"
 LOG="/tmp/claude-proxy.log"
+BBS_LOG="/tmp/agent-bbs.log"
 
 cleanup() {
   echo
   echo "[launcher] stopping proxy on :$PORT"
   lsof -i ":$PORT" -t 2>/dev/null | xargs -r kill 2>/dev/null || true
+  if [[ "$BBS_ENABLE" = "1" ]]; then
+    echo "[launcher] stopping BBS on :$BBS_PORT"
+    lsof -i ":$BBS_PORT" -t 2>/dev/null | xargs -r kill 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -52,7 +59,29 @@ if ! curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
 fi
 
 echo "[launcher] proxy up: $(curl -s http://127.0.0.1:$PORT/)"
-echo "[launcher] launching fsapp (Ctrl+C to stop both)"
+
+if [[ "$BBS_ENABLE" = "1" ]]; then
+  if lsof -i ":$BBS_PORT" -t >/dev/null 2>&1; then
+    echo "[launcher] BBS port $BBS_PORT busy; killing stale BBS"
+    lsof -i ":$BBS_PORT" -t 2>/dev/null | xargs -r kill 2>/dev/null || true
+    sleep 1
+    lsof -i ":$BBS_PORT" -t 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+  fi
+  echo "[launcher] starting BBS on :$BBS_PORT -> $BBS_LOG"
+  ( cd assets && nohup python3 agent_bbs.py > "$BBS_LOG" 2>&1 & )
+  for _ in $(seq 1 10); do
+    if curl -sf -H 'X-API-Key: agent-bbs-test' "http://127.0.0.1:$BBS_PORT/posts?limit=1" >/dev/null 2>&1; then
+      echo "[launcher] BBS up"
+      break
+    fi
+    sleep 1
+  done
+  if ! curl -sf -H 'X-API-Key: agent-bbs-test' "http://127.0.0.1:$BBS_PORT/posts?limit=1" >/dev/null 2>&1; then
+    echo "[launcher] BBS failed to come up; see $BBS_LOG (continuing without BBS)" >&2
+  fi
+fi
+
+echo "[launcher] launching fsapp (Ctrl+C to stop all)"
 echo "----------------------------------------------------------------"
 
 : "${GA_LLM_NOS:=opus-4-7,gpt,sonnet,opus-4-6}"
