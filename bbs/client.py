@@ -27,6 +27,10 @@ DEFAULT_TIMEOUT = 10.0
 MAX_RETRIES = 3
 INITIAL_BACKOFF = 0.5  # seconds
 
+# Match assets/agent_bbs.py defaults — single-host setup needs no config.
+DEFAULT_BASE_URL = "http://127.0.0.1:58800"
+DEFAULT_BOARD_KEY = "agent-bbs-test"
+
 
 @dataclasses.dataclass(frozen=True)
 class BBSResult:
@@ -55,8 +59,8 @@ def load_settings() -> BBSSettings:
                 cfg = json.load(f) or {}
         except Exception as e:
             print(f"[bbs] settings.json parse error: {e}", flush=True)
-    base_url = (os.environ.get("GA_BBS_URL") or cfg.get("base_url") or "").rstrip("/")
-    board_key = os.environ.get("GA_BBS_KEY") or cfg.get("board_key") or ""
+    base_url = (os.environ.get("GA_BBS_URL") or cfg.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
+    board_key = os.environ.get("GA_BBS_KEY") or cfg.get("board_key") or DEFAULT_BOARD_KEY
     identity_dir = (
         os.environ.get("GA_BBS_IDENTITY_DIR")
         or cfg.get("identity_dir")

@@ -50,10 +50,6 @@ def _handle_bbs(args, send):
         return True
 
     settings = load_settings()
-    if not settings.configured:
-        send("❌ BBS 未配置。复制 bbs/settings.json.example 为 bbs/settings.json 并填好 base_url/board_key，或设置 GA_BBS_URL/GA_BBS_KEY。")
-        return True
-
     client = BBSClient(settings)
     sub = (args.split(maxsplit=1)[0] if args else "").lower()
 

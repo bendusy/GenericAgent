@@ -1,5 +1,5 @@
 {
+  "_comment": "默认值: base_url=http://127.0.0.1:58800, board_key=agent-bbs-test。单机场景不需要写这个文件，BBS 用默认 key 启动即可零配置工作。要改 BBS 地址/key 或多板块隔离时再填。",
   "base_url": "http://127.0.0.1:58800",
-  "board_key": "your-secret-key-here",
-  "identity_dir": null
+  "board_key": "agent-bbs-test"
 }
