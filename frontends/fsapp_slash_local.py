@@ -20,10 +20,12 @@ _MAP = {
 
 _BBS_USAGE = (
     "用法：\n"
-    "  /bbs <任务内容>       发布任务到 BBS\n"
-    "  /bbs list [N]         看最近 N 条（默认 10）\n"
-    "  /bbs poll <since_id>  拉取 since_id 之后的新帖\n"
-    "  /bbs status           看身份与配置"
+    "  /bbs <任务内容>           单条任务\n"
+    "  /bbs fan <t1> | <t2> ...  并行拆分（| 或 ; 分隔，逐条独立发布）\n"
+    "  /bbs list [N]             看最近 N 条（默认 10）\n"
+    "  /bbs poll <since_id>      拉 since_id 之后的新帖\n"
+    "  /bbs workers              看 worker 在线情况\n"
+    "  /bbs status               看身份/配置/最近 5 条"
 )
 _DISPATCHER_NAME = "feishu-dispatcher"
 
@@ -97,6 +99,61 @@ def _handle_bbs(args, send):
             send("（暂无帖子）")
             return True
         send("\n".join(_format_post(p) for p in r.data))
+        return True
+
+    if sub == "fan":
+        rest = args[len("fan"):].strip()
+        if not rest:
+            send("用法：/bbs fan <任务1> | <任务2> | <任务3>\n（也支持用 ; 或换行分隔）")
+            return True
+        # split on | or ; or newline; allow worker hints like "@worker-a: 内容"
+        import re
+        parts = [p.strip() for p in re.split(r"[|;\n]+", rest) if p.strip()]
+        if len(parts) <= 1:
+            send("⚠️  没检测到分隔符（|;换行），请用 / bbs <任务> 发单条；或用 | 分隔多条")
+            return True
+        ok_ids, failed = [], []
+        for p in parts:
+            r = client.post(_DISPATCHER_NAME, p)
+            if r.ok:
+                ok_ids.append(r.data.get("id"))
+            else:
+                failed.append((p[:40], r.error))
+        msg = f"✅ 已拆为 {len(parts)} 个任务，发布成功 #{ok_ids}"
+        if failed:
+            msg += "\n❌ 失败：\n" + "\n".join(f"  «{t}…» → {e}" for t, e in failed)
+        send(msg)
+        return True
+
+    if sub == "workers":
+        authors_r = client._request("GET", "/authors")
+        if not authors_r.ok:
+            send(f"❌ {authors_r.error}")
+            return True
+        authors = authors_r.data or []
+        workers = [a for a in authors if a != _DISPATCHER_NAME]
+        if not workers:
+            send(
+                "⚠️  没有 worker 注册过。启动 worker：\n"
+                "  python3 agentmain.py --reflect reflect/agent_team_worker_robust.py\n"
+                "或起多个：\n"
+                "  GA_BBS_WORKER_NAME=worker-a python3 agentmain.py --reflect reflect/agent_team_worker_robust.py\n"
+                "  GA_BBS_WORKER_NAME=worker-b python3 agentmain.py --reflect reflect/agent_team_worker_robust.py"
+            )
+            return True
+        # 各 worker 最近一条活动时间
+        lines = [f"已注册 worker ({len(workers)}):"]
+        for w in workers:
+            r = client.list_posts(author=w, limit=1)
+            if r.ok and r.data:
+                p = r.data[0]
+                import time as _t
+                ago = int(_t.time() - (p.get("created_at") or 0))
+                ago_str = f"{ago}s 前" if ago < 60 else f"{ago // 60}m 前"
+                lines.append(f"  • {w}  最近活动: #{p['id']} ({ago_str})")
+            else:
+                lines.append(f"  • {w}  （注册过但无发帖）")
+        send("\n".join(lines))
         return True
 
     if sub == "poll":
