@@ -1,0 +1,5 @@
+{
+  "base_url": "http://127.0.0.1:58800",
+  "board_key": "your-secret-key-here",
+  "identity_dir": null
+}

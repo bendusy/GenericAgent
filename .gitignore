@@ -103,6 +103,7 @@ reflect/*
 !reflect/autonomous.py
 !reflect/scheduler.py
 !reflect/agent_team_worker.py
+!reflect/agent_team_worker_robust.py
 
 # Universal: never track __pycache__ anywhere
 **/__pycache__/
