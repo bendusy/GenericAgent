@@ -3,7 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
-PYTHON="${PYTHON_BIN:-$(command -v python3)}"
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  PYTHON="$PYTHON_BIN"
+elif [[ -x "$REPO/.venv/bin/python" ]]; then
+  PYTHON="$REPO/.venv/bin/python"
+else
+  PYTHON="$(command -v python3)"
+fi
 LARK_CLI_PATH="$(command -v lark-cli || true)"
 LARK_BIN_DIR="${LARK_CLI_PATH:+$(dirname "$LARK_CLI_PATH")}"
 LOG_DIR="$REPO/temp/autostart"
@@ -56,25 +62,37 @@ fi
 
 case "$(uname -s)" in
   Darwin)
-    TARGET="$HOME/Library/LaunchAgents/com.genericagent.fsapp.plist"
-    render "$SCRIPT_DIR/com.genericagent.fsapp.plist.tpl" > "$TARGET"
+    TARGET_FS="$HOME/Library/LaunchAgents/com.genericagent.fsapp.plist"
+    TARGET_WX="$HOME/Library/LaunchAgents/com.genericagent.wechatapp.plist"
+    render "$SCRIPT_DIR/com.genericagent.fsapp.plist.tpl" > "$TARGET_FS"
+    render "$SCRIPT_DIR/com.genericagent.wechatapp.plist.tpl" > "$TARGET_WX"
     launchctl bootout "gui/$UID/com.genericagent.fsapp" 2>/dev/null || true
-    launchctl bootstrap "gui/$UID" "$TARGET"
+    launchctl bootout "gui/$UID/com.genericagent.wechatapp" 2>/dev/null || true
+    launchctl bootstrap "gui/$UID" "$TARGET_FS"
+    launchctl bootstrap "gui/$UID" "$TARGET_WX"
     launchctl enable "gui/$UID/com.genericagent.fsapp" || true
-    echo "✅ macOS LaunchAgent installed: $TARGET"
+    launchctl enable "gui/$UID/com.genericagent.wechatapp" || true
+    echo "✅ macOS LaunchAgents installed:"
+    echo "   $TARGET_FS"
+    echo "   $TARGET_WX"
     echo "   inspect: launchctl print gui/$UID/com.genericagent.fsapp"
-    echo "   logs:    tail -f $LOG_DIR/fsapp.out.log $LOG_DIR/fsapp.err.log"
+    echo "            launchctl print gui/$UID/com.genericagent.wechatapp"
+    echo "   logs:    tail -f $LOG_DIR/fsapp.out.log $LOG_DIR/fsapp.err.log $LOG_DIR/wechatapp.out.log $LOG_DIR/wechatapp.err.log"
     ;;
   Linux)
     DIR="$HOME/.config/systemd/user"
     mkdir -p "$DIR"
-    TARGET="$DIR/genericagent-fsapp.service"
-    render "$SCRIPT_DIR/genericagent-fsapp.service.tpl" > "$TARGET"
+    TARGET_FS="$DIR/genericagent-fsapp.service"
+    TARGET_WX="$DIR/genericagent-wechatapp.service"
+    render "$SCRIPT_DIR/genericagent-fsapp.service.tpl" > "$TARGET_FS"
+    render "$SCRIPT_DIR/genericagent-wechatapp.service.tpl" > "$TARGET_WX"
     systemctl --user daemon-reload
-    systemctl --user enable --now genericagent-fsapp.service
-    echo "✅ systemd user unit installed: $TARGET"
-    echo "   inspect: systemctl --user status genericagent-fsapp"
-    echo "   logs:    tail -f $LOG_DIR/fsapp.out.log $LOG_DIR/fsapp.err.log"
+    systemctl --user enable --now genericagent-fsapp.service genericagent-wechatapp.service
+    echo "✅ systemd user units installed:"
+    echo "   $TARGET_FS"
+    echo "   $TARGET_WX"
+    echo "   inspect: systemctl --user status genericagent-fsapp genericagent-wechatapp"
+    echo "   logs:    tail -f $LOG_DIR/fsapp.out.log $LOG_DIR/fsapp.err.log $LOG_DIR/wechatapp.out.log $LOG_DIR/wechatapp.err.log"
     ;;
   *)
     echo "❌ unsupported OS: $(uname -s)" >&2
