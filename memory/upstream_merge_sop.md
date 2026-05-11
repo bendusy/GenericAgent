@@ -47,6 +47,17 @@ git merge origin/main --no-edit              # 用 merge，**不要用 rebase**
 git push origin main
 ```
 
+### 6. 重启 launchd 服务（macOS）
+推送后需要重启已加载的 plist 让新代码生效：
+```bash
+for label in $(launchctl list | awk '/com\.genericagent\./ {print $3}'); do
+  launchctl kickstart -k "gui/$(id -u)/$label"
+done
+```
+- `kickstart -k` = 强制 kill 当前进程并立即重启，比 `bootout`+`bootstrap` 简洁
+- 当前已安装的 label 通常是 `com.genericagent.fsapp`（可能还有 `wechatapp`）
+- 验证：`launchctl list | grep genericagent`，PID 应已变化
+
 ## 冲突解决参考
 
 ### `.gitignore` reflect 段
@@ -80,6 +91,9 @@ git stash push -u -m "pre-upstream-merge" && \
 git fetch upstream && git merge upstream/main --no-edit && \
 git stash pop ; \
 git fetch origin && git merge origin/main --no-edit && \
-git push origin main
+git push origin main && \
+for label in $(launchctl list | awk '/com\.genericagent\./ {print $3}'); do \
+  launchctl kickstart -k "gui/$(id -u)/$label"; \
+done
 ```
 冲突时脚本会停在 merge 步骤，手动解完再继续后续命令。
