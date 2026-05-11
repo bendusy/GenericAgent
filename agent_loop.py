@@ -1,6 +1,10 @@
 import json, re, os
 from dataclasses import dataclass
 from typing import Any, Optional
+from tool_guardrails import (
+    ToolCallGuardrailController, ToolCallGuardrailConfig,
+    toolguard_synthetic_result, append_toolguard_guidance,
+)
 @dataclass
 class StepOutcome:
     data: Any
@@ -45,6 +49,7 @@ def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, 
         {"role": "user", "content": initial_user_content if initial_user_content is not None else user_input}
     ]
     turn = 0;  handler.max_turns = max_turns
+    guardrail = ToolCallGuardrailController(ToolCallGuardrailConfig.from_env())
     while turn < handler.max_turns:
         turn += 1; turnstr = f'LLM Running (Turn {turn}) ...'
         if handler.parent.task_dir: turnstr = f'Turn {turn} ...'
@@ -72,16 +77,33 @@ def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, 
                 if verbose: yield f"🛠️ Tool: `{tool_name}`  📥 args:\n````text\n{get_pretty_json(args)}\n````\n"
                 else: yield f"🛠️ {tool_name}({_compact_tool_args(tool_name, args)})\n\n\n"
             handler.current_turn = turn
-            gen = handler.dispatch(tool_name, args, response, index=ii)
-            try:
-                v = next(gen)
-                def proxy(): yield v; return (yield from gen)
-                if verbose: yield '`````\n'
-                outcome = (yield from proxy()) if verbose else exhaust(proxy())
-                if verbose: yield '`````\n'
-            except StopIteration as e: outcome = e.value
-            
-            if outcome.should_exit: 
+
+            pre_decision = guardrail.before_call(tool_name, args) if tool_name != 'no_tool' else None
+            if pre_decision is not None and pre_decision.should_halt:
+                synthetic = toolguard_synthetic_result(pre_decision)
+                yield f"\n[guardrail/{pre_decision.code}] {pre_decision.message}\n"
+                outcome = StepOutcome(synthetic, next_prompt=pre_decision.message)
+            else:
+                gen = handler.dispatch(tool_name, args, response, index=ii)
+                try:
+                    v = next(gen)
+                    def proxy(): yield v; return (yield from gen)
+                    if verbose: yield '`````\n'
+                    outcome = (yield from proxy()) if verbose else exhaust(proxy())
+                    if verbose: yield '`````\n'
+                except StopIteration as e: outcome = e.value
+
+                if tool_name != 'no_tool':
+                    result_str = json.dumps(outcome.data, ensure_ascii=False, default=json_default) if type(outcome.data) in [dict, list] else (str(outcome.data) if outcome.data is not None else None)
+                    post_decision = guardrail.after_call(tool_name, args, result_str)
+                    if post_decision.action in {'warn', 'halt'}:
+                        yield f"\n[guardrail/{post_decision.code}] {post_decision.message}\n"
+                        if outcome.next_prompt:
+                            outcome = StepOutcome(outcome.data, next_prompt=append_toolguard_guidance(outcome.next_prompt, post_decision), should_exit=outcome.should_exit or post_decision.action == 'halt')
+                        elif post_decision.action == 'halt':
+                            outcome = StepOutcome(outcome.data, next_prompt=post_decision.message, should_exit=True)
+
+            if outcome.should_exit:
                 exit_reason = {'result': 'EXITED', 'data': outcome.data}; break
             if not outcome.next_prompt: 
                 exit_reason = {'result': 'CURRENT_TASK_DONE', 'data': outcome.data}; break
