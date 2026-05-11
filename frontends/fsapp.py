@@ -61,7 +61,7 @@ def _display_text(text):
         return f"📌 {m.group(1).strip()}"
     # ---
     tail = (text or "").strip()[-_TRUNC_TAIL:]
-    return "⚠️ 模型输出被截断或为空" + (f"\n…{tail}" if tail else "")
+    return "（无文本输出）" + (f"\n…{tail}" if tail else "")
 
 
 def _to_allowed_set(value):
