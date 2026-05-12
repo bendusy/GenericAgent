@@ -53,6 +53,8 @@ class Action:
     branches: Mapping[str, str] = field(default_factory=dict)
     branch_field: Optional[str] = None      # switch_by_field 时取该路径决定 runner
     budget: Mapping[str, Any] = field(default_factory=dict)
+    # 结果回写（②回路闭环）：dispatch.completed/failed 后把 summary 发回去
+    result_writeback: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,7 @@ def compile_rule(raw: Mapping[str, Any]) -> Rule:
         branches=action_raw.get("branches") or {},
         branch_field=action_raw.get("branch_field") or action_raw.get("field"),
         budget=action_raw.get("budget") or {},
+        result_writeback=action_raw.get("result_writeback") or {},
     )
     return Rule(name=name, when=when, action=action,
                 cont=bool(raw.get("continue", False)))

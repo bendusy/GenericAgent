@@ -568,8 +568,9 @@ class _TaskCard:
         self._push()
 
 
-def _make_task_hook(card, done_event, on_final):
-    """飞书任务 hook：每轮 patch 卡片状态；结束触发 on_final(raw) 处理附件。"""
+def _make_task_hook(card, done_event, on_final, *, user_input="", open_id="", chat_id=""):
+    """飞书任务 hook：每轮 patch 卡片状态；结束触发 on_final(raw) 处理附件 +
+    向 feishu_hub.journal emit ``agent.stop`` envelope（dispatcher 才能反向派活）。"""
     def hook(ctx):
         try:
             if ctx.get('exit_reason'):
@@ -578,12 +579,75 @@ def _make_task_hook(card, done_event, on_final):
                 card.done(_display_text(raw))
                 on_final(raw)
                 done_event.set()
+                # +++ fork anchor #3: feishu_hub journal emit
+                try:
+                    from feishu_hub import journal as _fhub_journal
+                    _fhub_journal.append({
+                        "event_type": "agent.stop",
+                        "source": "fsapp",
+                        "actor": {
+                            "agent": "ga",
+                            "session": chat_id or open_id or None,
+                            "turn": None,
+                        },
+                        "cwd": os.getcwd(),
+                        "summary": (user_input or "")[:200],
+                        "tags": ["task_done", "feishu"],
+                        "io": {
+                            "stdout_head": _display_text(raw)[:512],
+                            "stderr_head": "",
+                            "stdin_present": False,
+                            "tty": False,
+                        },
+                    })
+                except Exception as _je:
+                    print(f"[fork] feishu_hub journal emit skipped: {_je}", flush=True)
+                # ---
             elif ctx.get('summary'):
                 detail = _build_step_detail(ctx.get('response'), ctx.get('tool_calls') or [])
                 card.step(ctx['summary'], detail)
         except Exception as e:
             print(f"[fs hook] error: {e}")
     return hook
+
+
+# ③ slash 直派短路：白名单内的 /xxx 不进 agent loop，直接 emit agent.stop 给 dispatcher。
+# 加新 slash 只需扩展 _DISPATCHER_SLASH 集合（小写、不含 /）。
+_DISPATCHER_SLASH = {"research", "summarize", "review", "ask"}
+
+
+def _dispatcher_slash(user_input: str, *, open_id: str, chat_id: str) -> bool:
+    """命中则 emit journal envelope 并发送占位卡片；返回 True 表示已短路。"""
+    cmd = user_input.lstrip("/").split(None, 1)[0].lower() if len(user_input) > 1 else ""
+    if cmd not in _DISPATCHER_SLASH:
+        return False
+    receive_id = chat_id or open_id
+    rid_type = "chat_id" if chat_id else "open_id"
+    try:
+        send_message(receive_id, f"📨 已派调度中心处理 `/{cmd}` 命令，请稍候…",
+                     receive_id_type=rid_type)
+    except Exception as e:
+        print(f"[fork] dispatcher_slash ack send failed: {e}", flush=True)
+    try:
+        from feishu_hub import journal as _fhub_journal
+        _fhub_journal.append({
+            "event_type": "agent.stop",
+            "source": "fsapp.slash_shortcut",
+            "actor": {
+                "agent": "ga",
+                "session": chat_id or open_id,
+                "turn": None,
+            },
+            "cwd": os.getcwd(),
+            "summary": user_input[:200],
+            "tags": ["task_done", "feishu", f"slash:{cmd}"],
+            "io": {"stdout_head": "", "stderr_head": "", "stdin_present": False, "tty": False},
+        })
+        print(f"[fork] /{cmd} short-circuited to dispatcher", flush=True)
+        return True
+    except Exception as e:
+        print(f"[fork] dispatcher_slash emit failed: {e}", flush=True)
+        return False
 
 
 def handle_message(data):
@@ -602,6 +666,10 @@ def handle_message(data):
         return
     print(f"收到消息 [{open_id}] ({message.message_type}, {len(image_paths)} images): {user_input[:200]}")
     if message.message_type == "text" and user_input.startswith("/"):
+        # ③ slash 直派短路：把 /xxx 命令交给 feishu_hub.dispatcher（可由 rules.yaml 配置）
+        # 不进 agent loop，避免「一次对话即完成」的尴尬。
+        if _dispatcher_slash(user_input, open_id=open_id, chat_id=chat_id):
+            return
         return handle_command(open_id, user_input, chat_id)
 
     def run_agent():
@@ -614,7 +682,10 @@ def handle_message(data):
         card.start()
         on_final = lambda raw: _send_generated_files(receive_id, raw, receive_id_type=rid_type)
         if not hasattr(agent, '_turn_end_hooks'): agent._turn_end_hooks = {}
-        agent._turn_end_hooks[hook_key] = _make_task_hook(card, done_event, on_final)
+        agent._turn_end_hooks[hook_key] = _make_task_hook(
+            card, done_event, on_final,
+            user_input=user_input, open_id=open_id, chat_id=chat_id or "",
+        )
         try:
             agent.put_task(user_input, source="feishu", images=image_paths)
             start = time.time()
