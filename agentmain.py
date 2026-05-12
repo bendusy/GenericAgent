@@ -26,6 +26,10 @@ def load_tool_schema(suffix=''):
         import frontends.lark_bridge  # noqa: F401  triggers do_lark_cli injection
     except Exception as _e:
         print(f"[fork] lark_bridge load skipped: {_e}", flush=True)
+    try:
+        import frontends.lark_tools_adapter  # noqa: F401  triggers do_daily_report / do_feishu_notify injection
+    except Exception as _e:
+        print(f"[fork] lark_tools_adapter load skipped: {_e}", flush=True)
     # ---
     TOOLS_SCHEMA = json.loads(TS if os.name == 'nt' else TS.replace('powershell', 'bash'))
 load_tool_schema()
