@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from feishu_hub import config as cfgmod
 from feishu_hub import journal
 
+from . import bitable_writer
 from . import budget as budget_mod
 from . import loop
 from . import rules as rules_mod
@@ -49,13 +50,13 @@ def _load_rules(arg: Optional[str]) -> List[rules_mod.Rule]:
 
 
 def _build_emit() -> "loop.EmitFn":
-    """默认 emit：写回 journal jsonl。"""
+    """默认 emit：写回 journal jsonl + 异步写 bitable（若启用）。"""
     def _emit(payload: Dict[str, Any]) -> None:
         try:
             journal.append(payload)
         except Exception as e:
             sys.stderr.write(f"[dispatcher] journal emit failed: {e}\n")
-    return _emit
+    return bitable_writer.wrap_emit(_emit)
 
 
 def _build_dctx(rules_arg: Optional[str], *,

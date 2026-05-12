@@ -25,6 +25,11 @@ DEFAULTS: Dict[str, Any] = {
         "summarizer": "auto",  # auto | gemini | ga | trivial
         "git_repos": [],
     },
+    "bitable": {
+        "enabled": False,
+        "base_token": "",
+        "table_id": "",
+    },
     "shim": {
         "real_lark_cli": "",
         "stdout_head_bytes": 2048,
