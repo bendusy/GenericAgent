@@ -615,6 +615,13 @@ def _make_task_hook(card, done_event, on_final, *, user_input="", open_id="", ch
 # 加新 slash 只需扩展 _DISPATCHER_SLASH 集合（小写、不含 /）。
 _DISPATCHER_SLASH = {"research", "summarize", "review", "ask"}
 
+# dispatcher writeback 输出的 prefix（rules.yaml 里 result_writeback.prefix）。
+# 飞书 IM 进群后会被 fsapp bot 再次收到 → 需在此识别并跳过，避免回环派活。
+# 关键：保持与 rules.yaml 里使用的 prefix 同步。
+_DISPATCHER_ECHO_RE = re.compile(
+    r"^\s*(📚|🤖|📝|✅|📊|🔍|⚠️|📨)\s",
+)
+
 
 def _dispatcher_slash(user_input: str, *, open_id: str, chat_id: str) -> bool:
     """命中则 emit journal envelope 并发送占位卡片；返回 True 表示已短路。"""
@@ -663,6 +670,11 @@ def handle_message(data):
             send_message(chat_id, f"⚠️ 暂不支持处理此类飞书消息：{message.message_type}", receive_id_type="chat_id")
         else:
             send_message(open_id, f"⚠️ 暂不支持处理此类飞书消息：{message.message_type}")
+        return
+    # 防回环：dispatcher writeback 出去的 IM 会再被 fsapp 收到（因为发送方是
+    # lark-cli 同一用户身份），通过已知 prefix 标识跳过避免无限派活。
+    if _DISPATCHER_ECHO_RE.match(user_input):
+        print(f"[fsapp] skip dispatcher echo: {user_input[:80]}", flush=True)
         return
     print(f"收到消息 [{open_id}] ({message.message_type}, {len(image_paths)} images): {user_input[:200]}")
     if message.message_type == "text" and user_input.startswith("/"):

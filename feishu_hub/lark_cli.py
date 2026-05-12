@@ -150,8 +150,17 @@ def im_send_text(
     timeout: int = DEFAULT_TIMEOUT,
     binary: Optional[str] = None,
 ) -> Optional[str]:
-    """``im +messages-send --user-id --text --idempotency-key``，返回 ``message_id``。"""
-    argv: List[str] = ["im", "+messages-send", "--user-id", user_id, "--text", text]
+    """``im +messages-send``，根据 ``user_id`` 前缀自动选 ``--user-id`` 或 ``--chat-id``。
+
+    - ``ou_*`` / ``on_*`` / ``ol_*``：open_id 类，走 ``--user-id``
+    - ``oc_*``：chat_id（群/单聊），走 ``--chat-id``
+    """
+    target = user_id.strip()
+    if target.startswith("oc_"):
+        flag = "--chat-id"
+    else:
+        flag = "--user-id"
+    argv: List[str] = ["im", "+messages-send", flag, target, "--text", text]
     if idempotency_key:
         argv += ["--idempotency-key", idempotency_key]
     body = run_json(argv, timeout=timeout, binary=binary)
