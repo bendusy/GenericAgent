@@ -29,6 +29,9 @@ class RunnerEntry:
     chat_id: str  # 新增（route B：hitl_router 按 chat_id 反查）
     source_message_id: str
     started_at: str  # ISO8601
+    record_id: Optional[str] = None  # M4.C：Base 记录 record_id
+    base_token: Optional[str] = None  # M4.C：Base app_token
+    table_id: Optional[str] = None  # M4.C：Base table_id
 
 
 def _state_root() -> Path:

@@ -112,3 +112,49 @@ def test_unregister_also_cleans_adjust_sentinel(registry):
     registry.unregister("t1")
     assert registry.read_adjust_sentinel("t1") is None
     assert registry.read_abort_sentinel("t1") is None
+
+
+def test_runner_entry_optional_base_fields_default_none():
+    e = _entry()
+    assert e.record_id is None
+    assert e.base_token is None
+    assert e.table_id is None
+
+
+def test_runner_entry_serializes_record_id(registry):
+    import dataclasses
+    e = dataclasses.replace(
+        _entry(),
+        record_id="recABC",
+        base_token="bascnXYZ",
+        table_id="tbl001",
+    )
+    registry.register(e)
+    got = registry.lookup("t1")
+    assert got is not None
+    assert got.record_id == "recABC"
+    assert got.base_token == "bascnXYZ"
+    assert got.table_id == "tbl001"
+
+
+def test_lookup_old_json_without_record_id_field(registry, tmp_path):
+    import json
+    # 模拟旧版 JSON 文件（缺 record_id/base_token/table_id 字段）
+    old = {
+        "task_guid": "t_old",
+        "task_url": "https://feishu.cn/task/t_old",
+        "runner_pid": 1234,
+        "bot_app_id": "cli_x",
+        "chat_id": "oc_old",
+        "source_message_id": "om_old",
+        "started_at": "2026-01-01T00:00:00+08:00",
+    }
+    p = Path(os.environ["FEISHU_HUB_HOME"]) / "state" / "runners" / "t_old.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(old), encoding="utf-8")
+    got = registry.lookup("t_old")
+    assert got is not None
+    assert got.task_guid == "t_old"
+    assert got.record_id is None
+    assert got.base_token is None
+    assert got.table_id is None
