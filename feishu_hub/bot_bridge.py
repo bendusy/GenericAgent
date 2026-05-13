@@ -17,7 +17,7 @@ import queue
 import threading
 from typing import Iterator, Optional
 
-from . import hitl_router, runner_registry
+from . import base_config, base_intent_router, hitl_router, runner_registry
 from .bot_role import BotRole
 from .bot_runner import BotAction, handle_event
 from .event_bridge import consume_im
@@ -25,6 +25,46 @@ from .event_bridge import consume_im
 
 _log = logging.getLogger(__name__)
 _DONE = object()
+
+# Lazy-loaded base configs (per process). Cleared on demand by tests.
+_BASE_CONFIGS_CACHE: Optional[list] = None
+
+
+def _get_base_configs() -> list:
+    global _BASE_CONFIGS_CACHE
+    if _BASE_CONFIGS_CACHE is None:
+        try:
+            _BASE_CONFIGS_CACHE = base_config.load_all()
+        except Exception:
+            _log.exception("base_config.load_all failed; base trigger disabled")
+            _BASE_CONFIGS_CACHE = []
+    return _BASE_CONFIGS_CACHE
+
+
+def _try_base_intent(event: dict, registry: runner_registry.RunnerRegistry) -> bool:
+    """Route ``/run <base_ref>`` IM messages to base_intent_router.
+
+    Returns True when the event was consumed (caller skips legacy handle_event).
+    """
+    configs = _get_base_configs()
+    if not configs:
+        return False
+    msg_id = event.get("message_id", "")
+
+    def _reply(text: str) -> None:
+        from feishu_hub import lark_cli
+        try:
+            lark_cli.im_messages_reply(message_id=msg_id, text=text)
+        except Exception:
+            _log.exception("base reply failed: msg=%s", msg_id)
+
+    try:
+        return base_intent_router.try_handle(
+            event, configs=configs, registry=registry, reply_fn=_reply,
+        )
+    except Exception:
+        _log.exception("base_intent_router.try_handle failed: msg=%s", msg_id)
+        return False
 
 
 def run_bot(
@@ -65,6 +105,8 @@ def _run_sync(
     for event in consume_im(profile=bot.app_id, max_events=max_events, timeout=timeout):
         if _is_abort(event, registry):
             continue
+        if _try_base_intent(event, registry):
+            continue
         try:
             action = handle_event(event, bot)
         except Exception:
@@ -101,6 +143,9 @@ def _run_parallel(
                                     max_events=max_events, timeout=timeout):
                 if _is_abort(event, registry):
                     actions_q.put(None)  # 占位防 main loop 提前 break
+                    continue
+                if _try_base_intent(event, registry):
+                    actions_q.put(None)
                     continue
                 t = threading.Thread(target=_worker, args=(event,), daemon=True)
                 t.start()

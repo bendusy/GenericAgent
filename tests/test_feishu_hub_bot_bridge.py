@@ -186,3 +186,117 @@ def test_run_bot_parallel_dispatches_handle_event_in_threads(monkeypatch):
     assert msgs == ["om_0", "om_1", "om_2"]
     # handle_event 不在主线程
     assert all(tid != main_tid for tid in worker_tids)
+
+# ---------------------------------------------------------------------------
+# Phase 5: base_intent_router hook
+
+def _reset_base_cache(monkeypatch):
+    """Clear bot_bridge's lazy base_config cache between tests."""
+    monkeypatch.setattr(bb, "_BASE_CONFIGS_CACHE", None)
+
+
+def test_run_sync_calls_base_intent_router_first(monkeypatch):
+    """When base_intent_router consumes the event, handle_event must not run."""
+    _reset_base_cache(monkeypatch)
+    from feishu_hub import base_config as _bc, base_intent_router as _bir
+
+    event = {"message_id": "om_base", "chat_id": "oc_x", "content": "/run X"}
+    monkeypatch.setattr(_bc, "load_all", lambda: [object()])  # non-empty configs
+
+    calls = {"try_handle": 0, "handle": 0}
+
+    def fake_try_handle(ev, *, configs, registry, reply_fn):
+        calls["try_handle"] += 1
+        return True
+
+    def fake_handle(ev, b):
+        calls["handle"] += 1
+        return _ok_action()
+
+    monkeypatch.setattr(bb, "consume_im", lambda **_: iter([event]))
+    monkeypatch.setattr(_bir, "try_handle", fake_try_handle)
+    monkeypatch.setattr(bb, "handle_event", fake_handle)
+
+    actions = list(bb.run_bot(_bot()))
+    assert calls["try_handle"] == 1
+    assert calls["handle"] == 0
+    assert actions == []
+
+
+def test_run_sync_falls_through_when_base_not_consumed(monkeypatch):
+    """try_handle returns False → handle_event still runs (R5 path)."""
+    _reset_base_cache(monkeypatch)
+    from feishu_hub import base_config as _bc, base_intent_router as _bir
+
+    event = {"message_id": "om_legacy", "chat_id": "oc_x", "content": "hi"}
+    monkeypatch.setattr(_bc, "load_all", lambda: [object()])
+
+    seen = []
+
+    monkeypatch.setattr(_bir, "try_handle",
+                        lambda ev, *, configs, registry, reply_fn: False)
+
+    def fake_handle(ev, b):
+        seen.append(ev["message_id"])
+        return _ok_action(source_message_id=ev["message_id"])
+
+    monkeypatch.setattr(bb, "consume_im", lambda **_: iter([event]))
+    monkeypatch.setattr(bb, "handle_event", fake_handle)
+
+    actions = list(bb.run_bot(_bot()))
+    assert seen == ["om_legacy"]
+    assert [a.source_message_id for a in actions] == ["om_legacy"]
+
+
+def test_run_sync_skips_base_router_when_no_configs(monkeypatch):
+    """Empty base_config list → hook is transparent (zero R5 regression)."""
+    _reset_base_cache(monkeypatch)
+    from feishu_hub import base_config as _bc, base_intent_router as _bir
+
+    event = {"message_id": "om_legacy", "chat_id": "oc_x", "content": "hi"}
+    monkeypatch.setattr(_bc, "load_all", lambda: [])  # empty
+
+    try_handle_calls = []
+
+    def fake_try_handle(ev, *, configs, registry, reply_fn):
+        try_handle_calls.append(ev)
+        return True
+
+    monkeypatch.setattr(_bir, "try_handle", fake_try_handle)
+    monkeypatch.setattr(bb, "consume_im", lambda **_: iter([event]))
+    monkeypatch.setattr(bb, "handle_event", lambda ev, b: _ok_action())
+
+    list(bb.run_bot(_bot()))
+    assert try_handle_calls == []  # short-circuited before try_handle
+
+
+def test_run_parallel_calls_base_intent_router_first(monkeypatch):
+    """parallel=True：base_intent_router 也优先，命中后 handle_event 不跑。"""
+    _reset_base_cache(monkeypatch)
+    from feishu_hub import base_config as _bc, base_intent_router as _bir
+
+    events = [
+        {"message_id": "om_base", "chat_id": "oc_x", "content": "/run X"},
+        {"message_id": "om_other", "chat_id": "oc_x", "content": "hi"},
+    ]
+    monkeypatch.setattr(_bc, "load_all", lambda: [object()])
+
+    handled = []
+    base_seen = []
+
+    def fake_try_handle(ev, *, configs, registry, reply_fn):
+        base_seen.append(ev["message_id"])
+        return ev["message_id"] == "om_base"
+
+    def fake_handle(ev, b):
+        handled.append(ev["message_id"])
+        return _ok_action(source_message_id=ev["message_id"])
+
+    monkeypatch.setattr(bb, "consume_im", lambda **_: iter(events))
+    monkeypatch.setattr(_bir, "try_handle", fake_try_handle)
+    monkeypatch.setattr(bb, "handle_event", fake_handle)
+
+    actions = list(bb.run_bot(_bot(), parallel=True))
+    assert sorted(base_seen) == ["om_base", "om_other"]
+    assert handled == ["om_other"]
+    assert [a.source_message_id for a in actions] == ["om_other"]

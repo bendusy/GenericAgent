@@ -50,15 +50,39 @@ def _resolve_bot(record: dict, cfg: BaseConfig) -> Optional[str]:
     return cfg.stage_to_bot.get(stage)
 
 
+def _event_message(event: dict) -> dict:
+    """Return the inner message dict regardless of envelope shape.
+
+    ``event_bridge.consume_im`` yields flat events
+    (``{"message_id": ..., "chat_id": ..., "content": ...}``); some upstream /
+    test fixtures pass the raw envelope (``{"event": {"message": {...}}}``).
+    Accept both.
+    """
+    if isinstance(event, dict) and isinstance(event.get("event"), dict):
+        msg = event["event"].get("message")
+        if isinstance(msg, dict):
+            return msg
+    return event if isinstance(event, dict) else {}
+
+
 def _extract_text(event: dict) -> Optional[str]:
     try:
-        content = event["event"]["message"]["content"]
+        msg = _event_message(event)
+        content = msg.get("content", "")
         if isinstance(content, str):
-            content = json.loads(content)
+            # flat events 的 content 可能是 plain text 或 JSON-encoded {"text":"..."}
+            stripped = content.strip()
+            if stripped.startswith("{"):
+                try:
+                    content = json.loads(content)
+                except json.JSONDecodeError:
+                    return content
+            else:
+                return content
         if isinstance(content, dict):
             return content.get("text", "")
         return ""
-    except (KeyError, json.JSONDecodeError, TypeError):
+    except (KeyError, TypeError):
         return None
 
 
@@ -148,7 +172,7 @@ def try_handle(event: dict, *, configs: List[BaseConfig],
         reply_fn("并发冲突，本次放弃")
         return True
 
-    msg = event["event"]["message"]
+    msg = _event_message(event)
     chat_id = msg.get("chat_id", "")
     msg_id = msg.get("message_id", "")
     entry = RunnerEntry(
