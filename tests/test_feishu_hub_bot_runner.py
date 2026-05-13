@@ -8,6 +8,17 @@ import pytest
 from feishu_hub import bot_role as br
 from feishu_hub import bot_runner as r
 from feishu_hub.dispatcher.runners import RunResult, RunSpec
+from feishu_hub.task_writer import TaskRef
+
+
+@pytest.fixture(autouse=True)
+def _isolate_relay_task(monkeypatch):
+    """默认 mock bot_relay_task.record_start / record_end，防止真打飞书 API。
+
+    单独需要观察 record_start/end 行为的测试自己再覆盖 monkeypatch.setattr。
+    """
+    monkeypatch.setattr(r.bot_relay_task, "record_start", lambda **kw: None)
+    monkeypatch.setattr(r.bot_relay_task, "record_end", lambda **kw: None)
 
 
 def _bot(**over) -> br.BotRole:
@@ -167,3 +178,135 @@ def test_handle_event_skips_when_runner_timed_out():
     )
     assert action.timed_out is True
     assert "timeout" in captured["text"].lower() or "超时" in captured["text"]
+
+
+# ---------------------------------------------------------------------------
+# M3.E: record_start / record_end 调用顺序 + reply 含 task URL
+# ---------------------------------------------------------------------------
+
+def test_handle_event_calls_record_start_before_runner_and_end_after(monkeypatch):
+    """M3.E：handle_event 调用顺序 record_start → runner → record_end → reply。"""
+    bot = _bot()
+    ev = _ev()
+    order = []
+
+    def fake_start(*, bot, event, message_brief):
+        order.append("record_start")
+        return TaskRef(guid="g_test",
+                       url="https://applink.feishu.cn/client/todo/detail?guid=g_test")
+
+    def fake_runner(spec):
+        order.append("runner")
+        return _ok_result("done")
+
+    def fake_end(*, bot, action, result_text):
+        order.append("record_end")
+        return None
+
+    def fake_replier(**kw):
+        order.append("reply")
+        return "om_reply"
+
+    monkeypatch.setattr(r.bot_relay_task, "record_start", fake_start)
+    monkeypatch.setattr(r.bot_relay_task, "record_end", fake_end)
+
+    r.handle_event(ev, bot, runner=fake_runner, replier=fake_replier)
+    assert order == ["record_start", "runner", "record_end", "reply"]
+
+
+def test_handle_event_reply_text_contains_task_url(monkeypatch):
+    """reply 文本末尾应追加 task URL，方便 user 点开看完整进度。"""
+    bot = _bot()
+    ev = _ev()
+    captured = {}
+
+    def fake_start(*, bot, event, message_brief):
+        return TaskRef(guid="g_test",
+                       url="https://applink.feishu.cn/client/todo/detail?guid=g_test")
+
+    monkeypatch.setattr(r.bot_relay_task, "record_start", fake_start)
+    monkeypatch.setattr(r.bot_relay_task, "record_end", lambda **kw: None)
+
+    def fake_replier(**kw):
+        captured.update(kw)
+        return "om_reply"
+
+    r.handle_event(ev, bot,
+                   runner=lambda s: _ok_result("✅ 通过"),
+                   replier=fake_replier)
+    text = captured["text"]
+    assert "https://applink.feishu.cn/client/todo/detail?guid=g_test" in text
+    assert "查看完整进度" in text
+
+
+def test_handle_event_reply_without_task_url_when_record_start_returns_none(monkeypatch):
+    """relay_task 失败（chat_id 缺）时不附 URL，但 reply 仍发出。"""
+    bot = _bot()
+    ev = _ev()
+    captured = {}
+
+    monkeypatch.setattr(r.bot_relay_task, "record_start", lambda **kw: None)
+    monkeypatch.setattr(r.bot_relay_task, "record_end", lambda **kw: None)
+
+    def fake_replier(**kw):
+        captured.update(kw)
+        return "om_reply"
+
+    r.handle_event(ev, bot,
+                   runner=lambda s: _ok_result("ok"),
+                   replier=fake_replier)
+    text = captured["text"]
+    assert "applink.feishu.cn" not in text
+    assert "ok" in text  # 主体 reply 还在
+
+
+def test_handle_event_continues_when_record_start_raises(monkeypatch):
+    """relay_task 异常不应阻塞 runner / reply 主路径。"""
+    bot = _bot()
+    ev = _ev()
+    captured = {}
+
+    def boom_start(**kw):
+        raise RuntimeError("飞书 task API down")
+
+    monkeypatch.setattr(r.bot_relay_task, "record_start", boom_start)
+    monkeypatch.setattr(r.bot_relay_task, "record_end", lambda **kw: None)
+
+    def fake_replier(**kw):
+        captured.update(kw)
+        return "om_reply"
+
+    action = r.handle_event(ev, bot,
+                            runner=lambda s: _ok_result("survived"),
+                            replier=fake_replier)
+    # runner 跑了、reply 发了
+    assert action is not None
+    assert "survived" in captured["text"]
+
+
+def test_handle_event_continues_when_record_end_raises(monkeypatch):
+    """record_end 异常也不阻塞主路径。"""
+    bot = _bot()
+    ev = _ev()
+    captured = {}
+
+    monkeypatch.setattr(
+        r.bot_relay_task, "record_start",
+        lambda **kw: TaskRef(guid="g", url="https://applink.feishu.cn/x"),
+    )
+
+    def boom_end(**kw):
+        raise RuntimeError("flaky")
+
+    monkeypatch.setattr(r.bot_relay_task, "record_end", boom_end)
+
+    def fake_replier(**kw):
+        captured.update(kw)
+        return "om_reply"
+
+    action = r.handle_event(ev, bot,
+                            runner=lambda s: _ok_result("survived"),
+                            replier=fake_replier)
+    assert action is not None
+    # URL 还是附了（record_start 成功）
+    assert "applink.feishu.cn" in captured["text"]

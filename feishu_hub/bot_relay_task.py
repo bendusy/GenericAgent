@@ -21,12 +21,14 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from . import task_writer
 from .bot_role import BotRole
-from .bot_runner import BotAction
 from .task_writer import TaskRef
+
+if TYPE_CHECKING:
+    from .bot_runner import BotAction
 
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]")
@@ -83,7 +85,7 @@ def _format_start_step(bot: BotRole, event: Dict[str, Any], message_brief: str) 
     return f"🚀 [{bot.role}] 收到 @{sender}：{brief}"
 
 
-def _format_end_step(bot: BotRole, action: BotAction, result_text: str) -> str:
+def _format_end_step(bot: BotRole, action: "BotAction", result_text: str) -> str:
     """完成态 step：emoji + role + 状态描述 + 摘要前 200 字。"""
     if action.timed_out:
         return f"⚠️ [{bot.role}] 超时 (exit={action.runner_exit_code}, no completion signal)"
@@ -136,7 +138,7 @@ def record_start(
 def record_end(
     *,
     bot: BotRole,
-    action: BotAction,
+    action: "BotAction",
     result_text: str,
 ) -> Optional[TaskRef]:
     """Runner 跑之后调一次：append 完成 / 超时 / 失败 step。"""
