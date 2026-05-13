@@ -26,6 +26,7 @@ class RunnerEntry:
     task_url: str
     runner_pid: int
     bot_app_id: str
+    chat_id: str  # 新增（route B：hitl_router 按 chat_id 反查）
     source_message_id: str
     started_at: str  # ISO8601
 
@@ -100,6 +101,23 @@ class RunnerRegistry:
             return p.read_text(encoding="utf-8")
         except OSError:
             return None
+
+    def lookup_by_chat_id(self, chat_id: str) -> Optional[RunnerEntry]:
+        """扫 state_dir 找 chat_id 匹配的活 entry（POC：1 chat = 1 runner）。
+        多于 1 个时返回 started_at 最新的（防 stale entry 干扰）。
+        """
+        candidates = []
+        for p in self._root.glob("*.json"):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                entry = RunnerEntry(**data)
+            except (json.JSONDecodeError, TypeError, OSError):
+                continue
+            if entry.chat_id == chat_id:
+                candidates.append(entry)
+        if not candidates:
+            return None
+        return max(candidates, key=lambda e: e.started_at)
 
     def cleanup_orphans(self) -> int:
         cleaned = 0

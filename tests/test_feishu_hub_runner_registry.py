@@ -11,10 +11,10 @@ def registry(tmp_path, monkeypatch):
     return RunnerRegistry()
 
 
-def _entry(guid="t1", pid=12345):
+def _entry(guid="t1", pid=12345, chat_id="oc_test"):
     return RunnerEntry(
         task_guid=guid, task_url=f"https://feishu.cn/task/{guid}",
-        runner_pid=pid, bot_app_id="cli_x",
+        runner_pid=pid, bot_app_id="cli_x", chat_id=chat_id,
         source_message_id="om_x", started_at="2026-05-13T22:30:00+08:00",
     )
 
@@ -55,6 +55,29 @@ def test_unregister_also_cleans_sentinel(registry):
     registry.write_abort_sentinel("t1", "/stop")
     registry.unregister("t1")
     assert registry.read_abort_sentinel("t1") is None
+
+
+def test_lookup_by_chat_id_returns_match(registry):
+    registry.register(_entry(guid="t1", pid=1, chat_id="oc_alpha"))
+    registry.register(_entry(guid="t2", pid=2, chat_id="oc_beta"))
+    e = registry.lookup_by_chat_id("oc_alpha")
+    assert e is not None and e.task_guid == "t1"
+
+
+def test_lookup_by_chat_id_returns_none(registry):
+    registry.register(_entry(chat_id="oc_alpha"))
+    assert registry.lookup_by_chat_id("oc_other") is None
+
+
+def test_lookup_by_chat_id_returns_most_recent_when_multiple(registry):
+    import dataclasses
+    from feishu_hub.runner_registry import RunnerEntry
+    old = _entry(guid="t_old", pid=1, chat_id="oc_x")
+    registry.register(dataclasses.replace(old, started_at="2026-01-01T00:00:00+08:00"))
+    new = _entry(guid="t_new", pid=2, chat_id="oc_x")
+    registry.register(dataclasses.replace(new, started_at="2026-05-13T22:30:00+08:00"))
+    e = registry.lookup_by_chat_id("oc_x")
+    assert e.task_guid == "t_new"
 
 
 def test_cleanup_orphans_removes_dead_pids(registry, monkeypatch):
