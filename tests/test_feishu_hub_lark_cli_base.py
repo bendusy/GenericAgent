@@ -122,7 +122,7 @@ class TestBaseRecordSearch:
         from feishu_hub.lark_cli import base_record_search
 
         items = base_record_search(
-            base_token="bt", table_id="tbl", filter_expr="hello",
+            base_token="bt", table_id="tbl", keyword="hello",
         )
         assert len(items) == 2
         assert items[0]["record_id"] == "r1"
@@ -134,7 +134,7 @@ class TestBaseRecordSearch:
 
         base_record_search(
             base_token="bt", table_id="tbl",
-            filter_expr="alpha", page_size=50,
+            keyword="alpha", page_size=50,
         )
         argv = run_json.call_args.args[0]
         assert "+record-search" in argv

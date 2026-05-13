@@ -424,24 +424,33 @@ def base_record_upsert(
                        stdout=json.dumps(body)[:500] if body else "")
 
 
+# WARNING: base_record_search 走的是 lark-cli ``+record-search``，本质是
+# **全文 keyword 检索**，不是结构化字段过滤。如果你想按字段值（如
+# ``record_id == X`` / ``阶段 == "📋 选题"``）精确筛选记录，必须改用
+# ``base +record-list`` 配合**预先在 Base 里建好的过滤视图**（``view_id``），
+# 把过滤条件落在视图侧。本 helper 不支持结构化 filter，Phase 6 reconcile 这
+# 类语义请勿误用。
 def base_record_search(
     *,
     base_token: str,
     table_id: str,
-    filter_expr: str,
+    keyword: str,
     page_size: int = 100,
     search_fields: Optional[Sequence[str]] = None,
     timeout: int = DEFAULT_TIMEOUT,
     binary: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """``base +record-search``，返回 ``data.items`` 列表。
+    """**Keyword (full-text) search, not structured filter.** lark-cli 1.0.29 限制。
 
-    实测 lark-cli 1.0.29：``+record-search`` 仅接受 ``--json`` 一种参数形式
-    （没有 ``--filter`` / ``--query``），里头 schema 是
+    ``base +record-search`` 仅接受 ``--json`` 一种参数形式（没有 ``--filter`` /
+    ``--query``），里头 schema 是
     ``{"keyword":"<text>","search_fields":[...],"limit":<int>}``。
-    本封装把入参 ``filter_expr`` 映射成 ``keyword``，``page_size`` → ``limit``。
+    入参 ``keyword`` 直接透传给 lark-cli 的 ``keyword`` 字段，``page_size`` →
+    ``limit``。返回 ``data.items`` 列表。
+
+    若要按字段做精确/范围过滤，请改用 ``base +record-list`` + 预过滤视图。
     """
-    payload: Dict[str, Any] = {"keyword": filter_expr, "limit": page_size}
+    payload: Dict[str, Any] = {"keyword": keyword, "limit": page_size}
     if search_fields:
         payload["search_fields"] = list(search_fields)
     argv = [
