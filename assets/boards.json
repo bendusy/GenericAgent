@@ -1,6 +1,0 @@
-{
-  "agent-bbs-test": {
-    "name": "default",
-    "db": "agent_bbs.db"
-  }
-}

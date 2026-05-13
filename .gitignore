@@ -121,3 +121,7 @@ reflect/*
 **/__pycache__/
 
 .claude/
+
+# Runtime data accidentally tracked in 92c24c5; should never be in git
+assets/agent_bbs.db
+assets/boards.json
