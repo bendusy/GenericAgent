@@ -118,40 +118,50 @@ def _prep_env(spec: RunSpec, ctx: Optional[trace_mod.TraceCtx],
 
 
 def _run(cmd: Sequence[str], spec: RunSpec, agent_name: str,
-         ctx: Optional[trace_mod.TraceCtx]) -> RunResult:
+         ctx: Optional[trace_mod.TraceCtx],
+         on_pid: Optional[Callable[[int], None]] = None) -> RunResult:
     env = _prep_env(spec, ctx, agent_name)
     t0 = time.time()
     timed_out = False
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             list(cmd),
-            input=None,
-            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env=env,
             cwd=spec.cwd,
-            timeout=spec.timeout_s,
         )
-        rc = proc.returncode
-        stdout = proc.stdout or ""
-        stderr = proc.stderr or ""
-    except subprocess.TimeoutExpired as e:
-        timed_out = True
-        rc = -1
-        stdout = (e.stdout or b"").decode("utf-8", errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        stderr = (e.stderr or b"").decode("utf-8", errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
     except FileNotFoundError as e:
-        rc = 127
-        stdout = ""
-        stderr = f"binary not found: {e}"
+        duration_ms = int((time.time() - t0) * 1000)
+        return RunResult(
+            runner=spec.runner, exit_code=127, stdout="",
+            stderr=f"binary not found: {e}", stdout_head="",
+            stderr_head=f"binary not found: {e}",
+            duration_ms=duration_ms, timed_out=False,
+        )
+    if on_pid is not None:
+        try:
+            on_pid(proc.pid)
+        except Exception:
+            pass  # 回调异常不影响 runner 主路径
+    try:
+        stdout, stderr = proc.communicate(timeout=spec.timeout_s)
+        rc = proc.returncode
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        rc = -1
     duration_ms = int((time.time() - t0) * 1000)
     return RunResult(
         runner=spec.runner,
         exit_code=rc,
-        stdout=stdout,
-        stderr=stderr,
-        stdout_head=_head(stdout),
-        stderr_head=_head(stderr),
+        stdout=stdout or "",
+        stderr=stderr or "",
+        stdout_head=_head(stdout or ""),
+        stderr_head=_head(stderr or ""),
         duration_ms=duration_ms,
         timed_out=timed_out,
     )
@@ -160,7 +170,8 @@ def _run(cmd: Sequence[str], spec: RunSpec, agent_name: str,
 # ---- 具体 runner --------------------------------------------------------
 
 def cc_headless(spec: RunSpec,
-                ctx: Optional[trace_mod.TraceCtx] = None) -> RunResult:
+                ctx: Optional[trace_mod.TraceCtx] = None,
+                *, on_pid: Optional[Callable[[int], None]] = None) -> RunResult:
     """``claude -p <prompt> --output-format json [--resume id]``。
 
     CC json 输出含 ``cost_usd`` / ``num_turns`` / ``result``，会解出 final_text + cost。
@@ -174,7 +185,7 @@ def cc_headless(spec: RunSpec,
     if spec.resume_id:
         cmd += ["--resume", spec.resume_id]
     cmd += list(spec.extra_argv)
-    r = _run(cmd, spec, agent_name="cc", ctx=ctx)
+    r = _run(cmd, spec, agent_name="cc", ctx=ctx, on_pid=on_pid)
     return _enrich_cc(r)
 
 
@@ -207,7 +218,8 @@ def _enrich_cc(r: RunResult) -> RunResult:
 
 
 def codex_exec(spec: RunSpec,
-               ctx: Optional[trace_mod.TraceCtx] = None) -> RunResult:
+               ctx: Optional[trace_mod.TraceCtx] = None,
+               *, on_pid: Optional[Callable[[int], None]] = None) -> RunResult:
     """``codex exec <prompt>``。Codex CLI 0.130 无 hook，靠 wrapper 抓退出码。"""
     bin_ = _binary("codex", "FEISHU_HUB_CODEX_BIN")
     if not bin_:
@@ -219,11 +231,12 @@ def codex_exec(spec: RunSpec,
         cmd = [bin_, "resume", "--last"]
         # codex resume 不接 prompt；把 prompt 当 stdin 输入？暂仅支持新会话
     cmd += list(spec.extra_argv)
-    return _run(cmd, spec, agent_name="codex", ctx=ctx)
+    return _run(cmd, spec, agent_name="codex", ctx=ctx, on_pid=on_pid)
 
 
 def gemini_headless(spec: RunSpec,
-                    ctx: Optional[trace_mod.TraceCtx] = None) -> RunResult:
+                    ctx: Optional[trace_mod.TraceCtx] = None,
+                    *, on_pid: Optional[Callable[[int], None]] = None) -> RunResult:
     """``gemini -p <prompt> --output-format text``。"""
     bin_ = _binary("gemini", "FEISHU_HUB_GEMINI_BIN")
     if not bin_:
@@ -232,7 +245,7 @@ def gemini_headless(spec: RunSpec,
     if spec.model:
         cmd += ["-m", spec.model]
     cmd += list(spec.extra_argv)
-    r = _run(cmd, spec, agent_name="gemini", ctx=ctx)
+    r = _run(cmd, spec, agent_name="gemini", ctx=ctx, on_pid=on_pid)
     if r.exit_code == 0:
         r = RunResult(
             runner=r.runner, exit_code=r.exit_code, stdout=r.stdout,
@@ -243,7 +256,8 @@ def gemini_headless(spec: RunSpec,
     return r
 
 
-def noop(spec: RunSpec, ctx: Optional[trace_mod.TraceCtx] = None) -> RunResult:
+def noop(spec: RunSpec, ctx: Optional[trace_mod.TraceCtx] = None,
+         *, on_pid: Optional[Callable[[int], None]] = None) -> RunResult:
     """测试/dry-run 用：不调子进程，回声 prompt 头部。"""
     text = spec.prompt
     return RunResult(
@@ -261,7 +275,7 @@ def _missing(runner: str, msg: str) -> RunResult:
 
 # ---- 注册表 -------------------------------------------------------------
 
-RUNNERS: Dict[str, Callable[[RunSpec, Optional[trace_mod.TraceCtx]], RunResult]] = {
+RUNNERS: Dict[str, Callable[..., RunResult]] = {
     "cc_headless": cc_headless,
     "codex_exec": codex_exec,
     "gemini_headless": gemini_headless,
@@ -270,8 +284,9 @@ RUNNERS: Dict[str, Callable[[RunSpec, Optional[trace_mod.TraceCtx]], RunResult]]
 
 
 def run(spec: RunSpec,
-        ctx: Optional[trace_mod.TraceCtx] = None) -> RunResult:
+        ctx: Optional[trace_mod.TraceCtx] = None,
+        *, on_pid: Optional[Callable[[int], None]] = None) -> RunResult:
     fn = RUNNERS.get(spec.runner)
     if fn is None:
         return _missing(spec.runner, f"unknown runner: {spec.runner}")
-    return fn(spec, ctx)
+    return fn(spec, ctx, on_pid=on_pid)

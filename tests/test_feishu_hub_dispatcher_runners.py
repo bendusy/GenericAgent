@@ -10,11 +10,11 @@ from feishu_hub.dispatcher import runners, trace
 
 
 def _cp(rc=0, stdout="", stderr=""):
-    cp = MagicMock(spec=subprocess.CompletedProcess)
-    cp.returncode = rc
-    cp.stdout = stdout
-    cp.stderr = stderr
-    return cp
+    proc = MagicMock(spec=subprocess.Popen)
+    proc.pid = 12345
+    proc.returncode = rc
+    proc.communicate.return_value = (stdout, stderr)
+    return proc
 
 
 def _spec(**kw):
@@ -116,7 +116,7 @@ def test_cc_headless_missing_binary(monkeypatch):
 def test_cc_headless_parses_json_output(monkeypatch):
     monkeypatch.setenv("FEISHU_HUB_CC_BIN", "/fake/claude")
     body = json.dumps({"result": "all done", "cost_usd": 0.0125, "num_tokens": 312})
-    with patch.object(runners.subprocess, "run",
+    with patch.object(runners.subprocess, "Popen",
                       return_value=_cp(0, body, "")) as mk:
         r = runners.cc_headless(_spec(prompt="do thing"))
     assert r.exit_code == 0
@@ -131,7 +131,7 @@ def test_cc_headless_parses_json_output(monkeypatch):
 
 def test_cc_headless_with_resume_and_model(monkeypatch):
     monkeypatch.setenv("FEISHU_HUB_CC_BIN", "/c")
-    with patch.object(runners.subprocess, "run",
+    with patch.object(runners.subprocess, "Popen",
                       return_value=_cp(0, '{"result":"r"}', "")) as mk:
         runners.cc_headless(_spec(prompt="p", model="claude-opus-4-7",
                                   resume_id="sess-123"))
@@ -143,7 +143,7 @@ def test_cc_headless_with_resume_and_model(monkeypatch):
 def test_cc_headless_handles_non_json_output(monkeypatch):
     """CC 卡了 / 输出 plain text；不抛，final_text 为 None。"""
     monkeypatch.setenv("FEISHU_HUB_CC_BIN", "/c")
-    with patch.object(runners.subprocess, "run",
+    with patch.object(runners.subprocess, "Popen",
                       return_value=_cp(0, "weird plain output", "")):
         r = runners.cc_headless(_spec(prompt="x"))
     assert r.exit_code == 0
@@ -154,7 +154,7 @@ def test_cc_headless_handles_non_json_output(monkeypatch):
 
 def test_codex_exec_invokes_correct_argv(monkeypatch):
     monkeypatch.setenv("FEISHU_HUB_CODEX_BIN", "/co")
-    with patch.object(runners.subprocess, "run",
+    with patch.object(runners.subprocess, "Popen",
                       return_value=_cp(0, "ok", "")) as mk:
         runners.codex_exec(_spec(runner="codex_exec", prompt="review please"))
     argv = mk.call_args.args[0]
@@ -165,7 +165,7 @@ def test_codex_exec_invokes_correct_argv(monkeypatch):
 
 def test_codex_exec_passes_model(monkeypatch):
     monkeypatch.setenv("FEISHU_HUB_CODEX_BIN", "/co")
-    with patch.object(runners.subprocess, "run",
+    with patch.object(runners.subprocess, "Popen",
                       return_value=_cp(0, "", "")) as mk:
         runners.codex_exec(_spec(runner="codex_exec", prompt="p",
                                  model="gpt-5"))
@@ -177,7 +177,7 @@ def test_codex_exec_passes_model(monkeypatch):
 
 def test_gemini_headless_fills_final_text(monkeypatch):
     monkeypatch.setenv("FEISHU_HUB_GEMINI_BIN", "/g")
-    with patch.object(runners.subprocess, "run",
+    with patch.object(runners.subprocess, "Popen",
                       return_value=_cp(0, "  flowing prose  \n", "")):
         r = runners.gemini_headless(_spec(runner="gemini_headless"))
     assert r.final_text == "flowing prose"
@@ -185,7 +185,7 @@ def test_gemini_headless_fills_final_text(monkeypatch):
 
 def test_gemini_headless_argv(monkeypatch):
     monkeypatch.setenv("FEISHU_HUB_GEMINI_BIN", "/g")
-    with patch.object(runners.subprocess, "run",
+    with patch.object(runners.subprocess, "Popen",
                       return_value=_cp(0, "", "")) as mk:
         runners.gemini_headless(_spec(runner="gemini_headless", prompt="p",
                                       model="gemini-2.5-pro"))
@@ -199,10 +199,19 @@ def test_gemini_headless_argv(monkeypatch):
 def test_run_records_timeout(monkeypatch):
     monkeypatch.setenv("FEISHU_HUB_CC_BIN", "/c")
 
-    def raise_timeout(*a, **kw):
-        raise subprocess.TimeoutExpired("/c", 5)
+    proc = MagicMock(spec=subprocess.Popen)
+    proc.pid = 12345
+    proc.communicate.side_effect = subprocess.TimeoutExpired("/c", 5)
+    proc.communicate.return_value = ("", "")  # after kill()
 
-    with patch.object(runners.subprocess, "run", side_effect=raise_timeout):
+    def popen_factory(*a, **kw):
+        proc.communicate.side_effect = [
+            subprocess.TimeoutExpired("/c", 5),
+            ("", ""),
+        ]
+        return proc
+
+    with patch.object(runners.subprocess, "Popen", side_effect=popen_factory):
         r = runners.cc_headless(_spec(timeout_s=5))
     assert r.timed_out is True
     assert r.exit_code == -1
@@ -214,7 +223,7 @@ def test_run_records_file_not_found(monkeypatch):
     def fnf(*a, **kw):
         raise FileNotFoundError("nope")
 
-    with patch.object(runners.subprocess, "run", side_effect=fnf):
+    with patch.object(runners.subprocess, "Popen", side_effect=fnf):
         r = runners.cc_headless(_spec())
     assert r.exit_code == 127
     assert "binary not found" in r.stderr
@@ -248,7 +257,7 @@ def test_run_uses_registered_function():
         stdout_head="HIT", stderr_head="", duration_ms=0, timed_out=False,
     )
     original = runners.RUNNERS.get("noop")
-    runners.RUNNERS["noop"] = lambda s, c: sentinel
+    runners.RUNNERS["noop"] = lambda s, c, **kw: sentinel
     try:
         r = runners.run(_spec(runner="noop"))
         assert r.stdout == "HIT"
@@ -261,7 +270,7 @@ def test_run_uses_registered_function():
 
 def test_cc_headless_passes_cwd(monkeypatch, tmp_path):
     monkeypatch.setenv("FEISHU_HUB_CC_BIN", "/c")
-    with patch.object(runners.subprocess, "run",
+    with patch.object(runners.subprocess, "Popen",
                       return_value=_cp(0, "{}", "")) as mk:
         runners.cc_headless(_spec(cwd=str(tmp_path)))
     assert mk.call_args.kwargs["cwd"] == str(tmp_path)
@@ -269,10 +278,10 @@ def test_cc_headless_passes_cwd(monkeypatch, tmp_path):
 
 def test_cc_headless_respects_timeout(monkeypatch):
     monkeypatch.setenv("FEISHU_HUB_CC_BIN", "/c")
-    with patch.object(runners.subprocess, "run",
-                      return_value=_cp(0, "{}", "")) as mk:
+    proc = _cp(0, "{}", "")
+    with patch.object(runners.subprocess, "Popen", return_value=proc):
         runners.cc_headless(_spec(timeout_s=42))
-    assert mk.call_args.kwargs["timeout"] == 42
+    proc.communicate.assert_called_once_with(timeout=42)
 
 
 def test_runresult_has_aborted_field_defaults_false():
@@ -294,3 +303,40 @@ def test_runresult_aborted_settable():
     )
     assert r.aborted is True
     assert r.abort_reason == "/stop"
+
+
+# ---- on_pid 回调 -------------------------------------------------------
+
+def test_run_invokes_on_pid_callback_with_subprocess_pid():
+    from feishu_hub.dispatcher.runners import noop, RunSpec
+    seen_pids = []
+    noop(RunSpec(runner="noop", prompt="hello"), on_pid=seen_pids.append)
+    # noop runner 不真起子进程：on_pid 不会被调用（行为契约）
+    assert seen_pids == []
+
+
+def test_run_real_subprocess_invokes_on_pid(tmp_path):
+    """跑一个真实可结束的子进程（python3 -c），验证 _run 把 pid 报上来。"""
+    from feishu_hub.dispatcher.runners import _run, RunSpec
+    seen = []
+    spec = RunSpec(runner="test", prompt="", timeout_s=10)
+    _run(["python3", "-c", "print('ok')"], spec, agent_name="test", ctx=None,
+         on_pid=seen.append)
+    assert len(seen) == 1
+    assert isinstance(seen[0], int) and seen[0] > 0
+
+
+def test_run_subprocess_killed_returns_negative_exit():
+    """主线程在 on_pid 回调里把子进程杀掉，验证 _run 正常返回 exit_code=-15。"""
+    import os
+    import signal
+    from feishu_hub.dispatcher.runners import _run, RunSpec
+    spec = RunSpec(runner="test", prompt="", timeout_s=10)
+
+    def kill_it(pid: int) -> None:
+        os.kill(pid, signal.SIGTERM)
+
+    r = _run(["python3", "-c", "import time; time.sleep(30)"],
+             spec, agent_name="test", ctx=None, on_pid=kill_it)
+    assert r.exit_code == -15
+    assert r.timed_out is False
