@@ -105,7 +105,9 @@ sche_tasks/
 # CDP Bridge 密钥配置（首次运行自动生成）
 assets/tmwd_cdp_bridge/config.js
 assets/copilot_proxy.pyw
-**log.*
+# 旧的过宽 log 忽略 (**log.*) 会误捕 feishu_hub/git_log.py 等以 _log 结尾的源码；
+# 收窄到 .log 后缀加任意子扩展（如 app.log.1 / nginx.log.gz）。
+*.log.*
 
 # Reflect (ignore new files, whitelist existing)
 reflect/*
