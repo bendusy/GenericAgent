@@ -226,6 +226,17 @@ def cmd_indexer(args: argparse.Namespace) -> int:
           f"failed={len(summary.failed)}  total={summary.total}")
     for f in summary.failed[:10]:
         print(f"  [fail] {f.get('guid','?')[:8]} | {f.get('err','')}")
+
+    # M4.C Phase 6: reconcile stale running rows on role Bases.
+    # 失败 isolated（无 config/bases/*.yaml 时空 list；单个 Base 错走 LarkCLIError
+    # 被 reconcile 内部 swallow），不影响 indexer 退出码。
+    try:
+        n = base_indexer.reconcile_stale_running()
+        if n:
+            print(f"  reconcile: fixed {n} stale running row(s)")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] reconcile_stale_running raised: {e}", file=sys.stderr)
+
     return 0 if not summary.failed else 1
 
 
