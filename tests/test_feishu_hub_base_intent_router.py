@@ -116,3 +116,95 @@ def test_try_handle_consumes_run_command_happy_path(monkeypatch, tmp_path):
     assert entry is not None
     assert entry.runner_pid == 12345
     assert entry.base_token == "K6abc"
+
+
+# ---- Cycle 4.4: try_handle reject paths ----
+
+class _FakeRegistry:
+    """Minimal RunnerRegistry stub for reject-path tests."""
+
+    def __init__(self, existing=None):
+        self._existing = existing
+        self.registered = []
+
+    def lookup_by_record_id(self, record_id):
+        return self._existing
+
+    def register(self, entry):
+        self.registered.append(entry)
+
+
+def test_try_handle_replies_unknown_ref(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    replies = []
+    event = _make_event("/run garbage")
+    assert bir.try_handle(event, configs=_configs(), registry=_FakeRegistry(),
+                          reply_fn=replies.append) is True
+    assert any("无法解析" in r for r in replies)
+
+
+def test_try_handle_replies_unknown_base_token_after_url_parse(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    replies = []
+    event = _make_event(
+        "/run https://feishu.cn/base/Kunknown?table=tblXYZ&record=recABC"
+    )
+    assert bir.try_handle(event, configs=_configs(), registry=_FakeRegistry(),
+                          reply_fn=replies.append) is True
+    assert any("未注册" in r for r in replies)
+
+
+def test_try_handle_replies_when_record_already_running(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    from feishu_hub.runner_registry import RunnerEntry
+
+    existing = RunnerEntry(
+        task_guid="base-recABC", task_url="x", runner_pid=1, bot_app_id="b",
+        chat_id="c", source_message_id="m", started_at="t",
+        record_id="recABC", base_token="K6abc", table_id="tblXYZ",
+    )
+    replies = []
+    event = _make_event("/run 公众号-2026 record:recABC")
+    assert bir.try_handle(event, configs=_configs(),
+                          registry=_FakeRegistry(existing=existing),
+                          reply_fn=replies.append) is True
+    assert any("已有 runner" in r for r in replies)
+
+
+def test_try_handle_replies_when_record_non_idle(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    monkeypatch.setattr(bir, "base_record_get",
+                        lambda **kw: {"运行状态": ["running"], "阶段": ["📋 选题"], "负责 AI": []})
+    monkeypatch.setattr(bir, "cas_acquire_running",
+                        lambda **kw: (None, "non_idle"))
+    replies = []
+    event = _make_event("/run 公众号-2026 record:recABC")
+    assert bir.try_handle(event, configs=_configs(), registry=_FakeRegistry(),
+                          reply_fn=replies.append) is True
+    assert any("非 idle" in r for r in replies)
+
+
+def test_try_handle_replies_when_concurrent_conflict(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    monkeypatch.setattr(bir, "base_record_get",
+                        lambda **kw: {"运行状态": ["idle"], "阶段": ["📋 选题"], "负责 AI": []})
+    monkeypatch.setattr(bir, "cas_acquire_running",
+                        lambda **kw: (None, "concurrent_conflict"))
+    replies = []
+    event = _make_event("/run 公众号-2026 record:recABC")
+    assert bir.try_handle(event, configs=_configs(), registry=_FakeRegistry(),
+                          reply_fn=replies.append) is True
+    assert any("并发" in r for r in replies)
+
+
+def test_try_handle_replies_when_no_bot_resolved(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        bir, "base_record_get",
+        lambda **kw: {"运行状态": ["idle"], "阶段": ["未注册阶段"], "负责 AI": []},
+    )
+    replies = []
+    event = _make_event("/run 公众号-2026 record:recABC")
+    assert bir.try_handle(event, configs=_configs(), registry=_FakeRegistry(),
+                          reply_fn=replies.append) is True
+    assert any("未绑 bot" in r for r in replies)
