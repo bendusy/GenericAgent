@@ -45,8 +45,11 @@ def test_create_task_calls_lark_cli_as_bot(run_json, monkeypatch):
 
 
 @patch("feishu_hub.task_writer.run_json")
-def test_create_task_no_assignee(run_json, monkeypatch):
+@patch("feishu_hub.identity.resolve_user_open_id", return_value=None)
+def test_create_task_no_assignee(resolve_uid, run_json, monkeypatch):
+    """显式 assignee 不传 + identity 也解不出（mock 返回 None）→ argv 无 --assignee。"""
     monkeypatch.setenv("FEISHU_HUB_HOST", "testhost")
+    monkeypatch.delenv("FEISHU_NOTIFY_TO", raising=False)
     run_json.return_value = {"guid": "g", "url": "u"}
     create_task(agent="cc", cwd="/r", summary="s")
     argv = run_json.call_args.args[0]

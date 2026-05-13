@@ -64,6 +64,13 @@ def create_task(
     host_suffix = f"· {effective_host}"
     final_summary = summary if host_suffix in summary else f"{summary} {host_suffix}"
 
+    # 多 user/多 bot 路径：若 caller 不显式传 assignee_open_id，由 identity 层
+    # 从 lark-cli active profile 解出当前 user open_id；让 `lark-cli profile use`
+    # 切换能直接驱动 task 归属变化。
+    if not assignee_open_id:
+        from feishu_hub.identity import resolve_user_open_id
+        assignee_open_id = resolve_user_open_id()
+
     argv: List[str] = [
         "task", "+create",
         "--as", "bot",

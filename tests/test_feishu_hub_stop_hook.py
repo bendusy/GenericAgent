@@ -40,8 +40,9 @@ def test_run_fallback_on_lark_cli_failure(send_im, task_writer):
 
 
 @patch("feishu_hub.stop_hook.task_writer")
-def test_run_no_follower_skips_task(task_writer, capsys):
-    """没配 FEISHU_NOTIFY_TO（assignee_open_id 为空）→ 不调 task_writer，直接 exit 0。"""
+@patch("feishu_hub.identity.resolve_user_open_id", return_value=None)
+def test_run_no_follower_skips_task(resolve_uid, task_writer, capsys):
+    """assignee 显式为空 + identity 也解不出 → 不调 task_writer，exit 0。"""
     rc = run(agent="cc", session="s", cwd="/r", summary="x", assignee_open_id="")
     assert rc == 0
     task_writer.get_or_create_for_session.assert_not_called()

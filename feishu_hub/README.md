@@ -216,15 +216,35 @@ tail -20 ~/.feishu_hub/journal/$(date +%Y-%m-%d).jsonl   # 看 stop_hook 那次�
 
 任何一步卡住超过 3 次重试，**停下报告"BLOCKED on step N: <错误摘要>"，让用户决定**。不要在用户没看到的情况下静默 fallback 到旧路径（比如直接发 IM text），这违反"对用户透明"原则。
 
-### 多机部署（同账号不同 bot）
+### 多 user / 多 bot / 多机（统一通过 lark-cli profile）
 
-如果用户同一个飞书账号在另一台机器（如 axis）也跑 GA：
+**心智模型**：lark-cli 的 **profile** 就是 feishu_hub 的身份单位——每个 profile = `(appId, brand, user)` 元组。feishu_hub 不发明 identity 概念，所有"是哪个 user / 是哪个 bot"问题都通过 `lark-cli profile` 解。
 
-- 第 2 步在 **每台机器各建一个独立 app**（不要共享 appSecret），这样 `appId` 维度可区分两台机器
-- 第 4 步 `FEISHU_NOTIFY_TO` 都填**同一个 user open_id**（user 是同一人）
-- 第 5 步 init 各自独立——不要拷贝 `~/.feishu_hub/state/` 跨机器
-- **host 区分**：task_writer 自动在 task summary 末尾追加 `· {hostname}` 后缀，让飞书 task 列表一眼看出 `[cc] @repo · macbook` 还是 `[cc] @repo · axis`。默认取 `socket.gethostname()` 首段（去 `.local`），可以设 `export FEISHU_HUB_HOST=axis` 覆盖。
-- 跨机协同（一台 bot @mention 另一台 bot）属 M3.C 范围，本期暂不接
+```bash
+# 一行看清当前活跃身份
+python -m feishu_hub whoami
+# ✓ profile=cli_a9449f8a2f799bdb user=dustben (ou_xxx) bot=a9449f8a (cli_xxx) host=M4 token=valid
+
+# 切到另一个 bot/user（lark-cli 1.0.28 已支持）
+lark-cli profile use <name>
+python -m feishu_hub whoami   # 跟随更新
+```
+
+适用场景：
+
+| 场景 | 怎么配 |
+|---|---|
+| 一台机器、一个用户、一个 bot | 装好后默认 profile 即可，不用切 |
+| 一个用户、多个 bot（如 reviewer/scribe 分工 → M3.C） | `lark-cli profile add` 每个 bot 一个 profile；跑 agent 前 `profile use` 切相应 bot |
+| 一个用户、多台机器（mac + axis） | 每台机器**各建独立 app**（不要共享 appSecret），各自 `lark-cli config init` 配自己的 profile |
+| 同台机器、多个用户（家庭 + 工作） | 每个 user 一个 profile，按需 `profile use` 切 |
+
+**默认行为**（M3.B 后）：
+- task_writer.create_task 不显式传 `assignee_open_id` 时，从 `lark-cli auth status` 取当前 active profile 的 user_open_id → 切 profile 自动改变 task 归属
+- summary 自动后缀 `· {hostname}` 区分机器；可 `export FEISHU_HUB_HOST=axis` 覆盖
+- IM fallback 也走同一 active profile，多 bot 时不会跨身份发消息
+
+**多机协同**（一台 bot @mention 另一台 bot）属 M3.C 范围；本期已通过 host suffix 让飞书 task UI 区分来源。
 
 ---
 

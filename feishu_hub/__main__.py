@@ -145,6 +145,38 @@ def cmd_shim(args: argparse.Namespace) -> int:
     return shim_mod.main(["lark-cli", *sub])
 
 
+def cmd_whoami(args: argparse.Namespace) -> int:
+    """打印当前 feishu_hub 解出的 (profile / user / bot / host) 身份。
+
+    多 user / 多 bot 场景下用 ``lark-cli profile use <name>`` 切换后重跑本命令验证。
+    """
+    from . import identity as ident_mod
+    ident = ident_mod.current_identity()
+    print(ident.describe())
+    if not ident.is_ready:
+        print()
+        print("[warn] identity 不完整。检查清单：")
+        if not ident.profile_name:
+            print("  - lark-cli profile list 无 active profile：跑 `lark-cli config init`")
+        if not ident.bot_app_id:
+            print("  - 无 bot appId：可能 profile 配置文件损坏")
+        if not ident.user_open_id:
+            print("  - 无 user open_id：跑 `lark-cli auth login --scope ...`")
+        if ident.token_status and ident.token_status != "valid":
+            print(f"  - token 状态={ident.token_status}：跑 `lark-cli auth login --domain ...` 刷新")
+
+    # 显示所有 profile 帮助多 bot 切换
+    profiles = ident_mod.list_profiles()
+    if len(profiles) > 1:
+        print()
+        print(f"共 {len(profiles)} 个 profile（active 已标 ✓）：")
+        for p in profiles:
+            mark = "✓" if p.get("active") else " "
+            print(f"  [{mark}] {p.get('name')} | brand={p.get('brand')} user={p.get('user','-')}")
+        print("\n切换：lark-cli profile use <name>")
+    return 0 if ident.is_ready else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="feishu_hub")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -165,6 +197,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_shim = sub.add_parser("shim", help="以模块形式运行 shim")
     p_shim.add_argument("argv", nargs=argparse.REMAINDER)
     p_shim.set_defaults(func=cmd_shim)
+
+    p_whoami = sub.add_parser(
+        "whoami",
+        help="打印当前 feishu_hub 身份（profile / user / bot / host）—— 多 user/多 bot 切换后用这个确认",
+    )
+    p_whoami.set_defaults(func=cmd_whoami)
 
     return p
 

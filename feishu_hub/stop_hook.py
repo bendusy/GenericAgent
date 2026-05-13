@@ -34,7 +34,15 @@ def run(
     summary: str,
     assignee_open_id: Optional[str],
 ) -> int:
-    """主入口。失败兜底不阻塞 agent。"""
+    """主入口。失败兜底不阻塞 agent。
+
+    ``assignee_open_id`` 缺省时走 identity.resolve_user_open_id()：先 env
+    ``FEISHU_NOTIFY_TO``，再 lark-cli active profile 的 user_open_id，再
+    ``~/.feishu_hub/config.yaml`` 的 notify_receive_id。三个全空才真静默退出。
+    """
+    if not assignee_open_id:
+        from feishu_hub.identity import resolve_user_open_id
+        assignee_open_id = resolve_user_open_id()
     if not assignee_open_id:
         return 0  # 没配通知对象 → 静默退出
 
