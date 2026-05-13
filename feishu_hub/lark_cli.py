@@ -403,6 +403,14 @@ def base_record_upsert(
     if record_id:
         argv += ["--record-id", record_id]
     body = run_json(argv, timeout=timeout, binary=binary)
+    # run_json only checks subprocess exit code; lark-cli can exit 0 with
+    # ``{"code": <非零业务码>, "msg": "..."}``。这里显式核对业务码，避免静默失败。
+    if isinstance(body, dict):
+        biz_code = body.get("code", 0)
+        if isinstance(biz_code, int) and biz_code != 0:
+            biz_msg = body.get("msg") if isinstance(body.get("msg"), str) else ""
+            raise LarkCLIError(biz_code, biz_msg or "record-upsert business error",
+                               argv, stdout=json.dumps(body, ensure_ascii=False)[:500])
     if record_id:
         return record_id
     rid_list = _pluck(body, ("data", "record", "record_id_list"))

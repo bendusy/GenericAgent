@@ -77,6 +77,39 @@ class TestBaseRecordUpsertUpdate:
         assert argv[argv.index("--record-id") + 1] == "recOLD"
 
 
+class TestBaseRecordUpsertBusinessCode:
+    @patch("feishu_hub.lark_cli.run_json")
+    def test_base_record_upsert_raises_on_business_code_nonzero(self, run_json):
+        """Update path: run_json exits 0 but body has non-zero business code."""
+        import pytest
+        run_json.return_value = {"code": 91234, "msg": "forbidden", "data": {}}
+        from feishu_hub.lark_cli import base_record_upsert, LarkCLIError
+
+        with pytest.raises(LarkCLIError) as exc:
+            base_record_upsert(
+                base_token="bt", table_id="tbl",
+                fields={"任务标题": "x"},
+                record_id="recOLD",
+            )
+        assert exc.value.code == 91234
+        assert "forbidden" in exc.value.msg
+
+    @patch("feishu_hub.lark_cli.run_json")
+    def test_base_record_upsert_create_raises_on_business_code_nonzero(self, run_json):
+        """Create path: same business-code check applies."""
+        import pytest
+        run_json.return_value = {"code": 91234, "msg": "forbidden", "data": {}}
+        from feishu_hub.lark_cli import base_record_upsert, LarkCLIError
+
+        with pytest.raises(LarkCLIError) as exc:
+            base_record_upsert(
+                base_token="bt", table_id="tbl",
+                fields={"任务标题": "x"},
+            )
+        assert exc.value.code == 91234
+        assert "forbidden" in exc.value.msg
+
+
 # --- base_record_search ---------------------------------------------------
 
 class TestBaseRecordSearch:
