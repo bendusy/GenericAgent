@@ -21,6 +21,10 @@ DSL 字段（每条 rule）：
 - ``continue``: bool，匹配后是否继续尝试下一条（默认 ``False``）
 
 `agent.dispatched*` / `dispatch.*` 这些 event 永远不参与 matcher（防自激）。
+
+M3.A 协同模型说明：本模块只匹配 hook 单次触发（fire 模式）传入的 envelope。
+不再从本地 journal tail 触发。云侧（@mention/关键词）路由由飞书 Base
+Workflow ``LarkMessageTrigger`` 承担（见 M3.B 计划）。
 """
 from __future__ import annotations
 

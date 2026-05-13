@@ -1,12 +1,13 @@
 """``python -m feishu_hub.dispatcher`` — 反向 hook 调度入口。
 
-3 种触发模式：
+2 种触发模式：
 
 - ``fire``：单次。stdin 接收一条 envelope JSON（或 hook 原始 JSON 转 envelope），
   立刻 dispatch。CC/Codex/Gemini Stop/SessionEnd hook 直触用这个。
-- ``tail``：常驻。tail journal jsonl，对每条 envelope 走 ``dispatch_event``。
-  launchd plist 拉起这个。
 - ``replay``：调试。从已有 journal jsonl 按 event_id 选一条，重新跑一遍。
+
+事件源是 lark-cli event consume（飞书=共享状态机），本地 journal 仅作审计缓存，
+不作为协作事件源——故不提供 tail 模式。
 
 所有模式共享同一份 rules.yaml + RunawayTracker + BudgetState。
 """
@@ -15,16 +16,13 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
-import os
 import sys
-import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 from feishu_hub import config as cfgmod
 from feishu_hub import journal
 
-from . import bitable_writer
 from . import budget as budget_mod
 from . import loop
 from . import rules as rules_mod
@@ -50,13 +48,13 @@ def _load_rules(arg: Optional[str]) -> List[rules_mod.Rule]:
 
 
 def _build_emit() -> "loop.EmitFn":
-    """默认 emit：写回 journal jsonl + 异步写 bitable（若启用）。"""
+    """默认 emit：写回 journal jsonl。"""
     def _emit(payload: Dict[str, Any]) -> None:
         try:
             journal.append(payload)
         except Exception as e:
             sys.stderr.write(f"[dispatcher] journal emit failed: {e}\n")
-    return bitable_writer.wrap_emit(_emit)
+    return _emit
 
 
 def _build_dctx(rules_arg: Optional[str], *,
@@ -103,120 +101,6 @@ def cmd_fire(args: argparse.Namespace) -> int:
     _save_budget(dctx)
     print(f"[dispatcher fire] dispatched {n}")
     return 0
-
-
-# ---- tail -------------------------------------------------------------
-
-def _today_journal_path() -> Path:
-    return journal.journal_dir() / (_dt.date.today().isoformat() + ".jsonl")
-
-
-def _checkpoint_path() -> Path:
-    return cfgmod.root_dir() / "state" / "dispatcher.last_event_id"
-
-
-def _load_checkpoint() -> Optional[str]:
-    p = _checkpoint_path()
-    if not p.exists():
-        return None
-    text = p.read_text(encoding="utf-8").strip()
-    return text or None
-
-
-def _save_checkpoint(event_id: str) -> None:
-    """每条事件处理后落 last_event_id，重启从这条之后续读。"""
-    p = _checkpoint_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(event_id, encoding="utf-8")
-    os.replace(tmp, p)
-
-
-def _replay_pending(fh, last_event_id: Optional[str]) -> bool:
-    """文件已 open，定位到 last_event_id 之后；找不到则跳到 EOF。
-
-    返回 True = 找到 checkpoint，已定位到其后；False = 没找到（新文件 / 已被切走）。
-    """
-    if last_event_id is None:
-        fh.seek(0, os.SEEK_END)
-        return False
-    fh.seek(0)
-    found = False
-    while True:
-        pos_before = fh.tell()
-        line = fh.readline()
-        if not line:
-            break
-        try:
-            event = json.loads(line.strip())
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if event.get("event_id") == last_event_id:
-            found = True
-            break
-    if not found:
-        # 没在当前文件找到（很可能是 rotate 切走），从头处理整文件
-        fh.seek(0)
-    return found
-
-
-def cmd_tail(args: argparse.Namespace) -> int:
-    dctx = _build_dctx(args.rules, max_depth=args.max_depth)
-    sleep_s = max(0.1, float(args.poll_interval))   # 防 0 占满 CPU
-
-    current_path: Optional[Path] = None
-    fh = None
-    print(f"[dispatcher tail] watching {journal.journal_dir()}", flush=True)
-    print(f"[dispatcher tail] checkpoint = {_load_checkpoint() or '(none)'}",
-          flush=True)
-    try:
-        while True:
-            today_path = _today_journal_path()
-            if current_path != today_path:
-                if fh is not None:
-                    fh.close()
-                if not today_path.exists():
-                    today_path.parent.mkdir(parents=True, exist_ok=True)
-                    today_path.touch()
-                fh = today_path.open("r", encoding="utf-8")
-                checkpoint = _load_checkpoint()
-                catchup_found = _replay_pending(fh, checkpoint)
-                current_path = today_path
-                mode = ("resume" if catchup_found
-                        else "fresh-tail" if checkpoint is None
-                        else "fresh-rotate")
-                print(f"[dispatcher tail] open {today_path} ({mode})",
-                      flush=True)
-            line = fh.readline()
-            if not line:
-                time.sleep(sleep_s)
-                continue
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            try:
-                n = loop.dispatch_event(event, dctx)
-                if n:
-                    _save_budget(dctx)
-            except Exception as e:
-                sys.stderr.write(f"[dispatcher tail] dispatch failed: {e}\n")
-            # 不论是否触发派活，都更新 checkpoint —— 表明这条已处理过
-            eid = event.get("event_id")
-            if eid:
-                try:
-                    _save_checkpoint(eid)
-                except Exception as e:
-                    sys.stderr.write(f"[dispatcher tail] checkpoint save failed: {e}\n")
-    except KeyboardInterrupt:
-        print("[dispatcher tail] stopping", flush=True)
-        return 0
-    finally:
-        if fh is not None:
-            fh.close()
 
 
 # ---- replay -----------------------------------------------------------
@@ -285,12 +169,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_fire.add_argument("--event-file", default="-",
                         help='"-" 表示 stdin（默认）')
     p_fire.set_defaults(func=cmd_fire)
-
-    p_tail = sub.add_parser("tail", parents=[common],
-                            help="常驻 tail journal jsonl（launchd 拉起用）")
-    p_tail.add_argument("--poll-interval", default="0.5",
-                        help="无新行时 sleep 秒数（默认 0.5）")
-    p_tail.set_defaults(func=cmd_tail)
 
     p_replay = sub.add_parser("replay", parents=[common],
                               help="按 event_id 从 journal 重派")

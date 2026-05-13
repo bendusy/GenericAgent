@@ -2,9 +2,10 @@
 
 设计：``docs/FEISHU_HUB_DISPATCHER_DESIGN.md`` §3/§7/§8/§11。
 
-本模块不做 IO：不读 rules.yaml、不 tail journal、不调 lark-cli。
+本模块不做 IO：不读 rules.yaml、不调 lark-cli、不写飞书状态。
 所有外部状态（rules、runaway_tracker、budget_state）由调用方传入；
-journal envelope 也通过回调 ``emit_event`` 接出，便于单测。
+``emit_event`` 回调用于本机 journal 审计落盘（不再用于写飞书协作状态——
+M3.A 后协作状态由 hook/runner 直接调 lark-cli 写 Task / IM）。
 """
 from __future__ import annotations
 

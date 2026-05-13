@@ -1,18 +1,12 @@
-"""feishu_hub.dispatcher.cli 单测：fire / test-rule / replay 入口。
-
-tail 模式因常驻不便单测，只覆盖 build_dctx / parser。
-"""
-import datetime as _dt
+"""feishu_hub.dispatcher.cli 单测：fire / test-rule / replay 入口。"""
 import json
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 yaml = pytest.importorskip("yaml")
 
 from feishu_hub import config as cfgmod
-from feishu_hub.dispatcher import cli, loop, runners
+from feishu_hub.dispatcher import cli
 
 
 @pytest.fixture
@@ -147,55 +141,6 @@ def test_build_dctx_missing_rules_returns_empty(fhub_home):
 def test_build_dctx_max_depth_passthrough(rules_yaml, fhub_home):
     dctx = cli._build_dctx(None, max_depth=7)
     assert dctx.max_depth == 7
-
-
-# ---- checkpoint ---------------------------------------------------------
-
-def test_checkpoint_save_and_load(fhub_home):
-    assert cli._load_checkpoint() is None
-    cli._save_checkpoint("EVT_X")
-    assert cli._load_checkpoint() == "EVT_X"
-
-
-def test_checkpoint_save_is_atomic(fhub_home):
-    cli._save_checkpoint("EVT_A")
-    # 应该不留 .tmp
-    p = cli._checkpoint_path()
-    assert p.exists()
-    assert not p.with_suffix(p.suffix + ".tmp").exists()
-
-
-def test_replay_pending_finds_and_resumes_after(tmp_path):
-    """checkpoint 在文件第二行 → 应定位到第三行起。"""
-    p = tmp_path / "j.jsonl"
-    p.write_text(
-        '{"event_id":"A"}\n'
-        '{"event_id":"B"}\n'
-        '{"event_id":"C"}\n',
-        encoding="utf-8",
-    )
-    fh = p.open("r")
-    assert cli._replay_pending(fh, "B") is True
-    line = fh.readline()
-    assert '"event_id":"C"' in line
-
-
-def test_replay_pending_missing_checkpoint_replays_all(tmp_path):
-    p = tmp_path / "j.jsonl"
-    p.write_text('{"event_id":"X"}\n{"event_id":"Y"}\n', encoding="utf-8")
-    fh = p.open("r")
-    found = cli._replay_pending(fh, "NEVER")
-    assert found is False
-    # 从头读，能拿到所有事件
-    assert '"event_id":"X"' in fh.readline()
-
-
-def test_replay_pending_no_checkpoint_seeks_eof(tmp_path):
-    p = tmp_path / "j.jsonl"
-    p.write_text('{"event_id":"X"}\n', encoding="utf-8")
-    fh = p.open("r")
-    cli._replay_pending(fh, None)
-    assert fh.readline() == ""  # 已在 EOF
 
 
 # ---- helpers --------------------------------------------------------------
