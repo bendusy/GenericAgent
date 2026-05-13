@@ -38,3 +38,29 @@ def test_parse_garbage_returns_none():
 def test_parse_url_with_extra_params_still_works():
     text = "https://feishu.cn/base/K6abc?table=tblXYZ&foo=bar&record=recABC"
     assert bir._parse_base_ref(text, _configs()) == ("K6abc", "tblXYZ", "recABC")
+
+
+# ---- Cycle 4.2: _resolve_bot ----
+
+def test_resolve_bot_prefers_负责AI():
+    cfg = _configs()[0]
+    rec = {"负责 AI": ["drafter_bot"], "阶段": ["📋 选题"]}
+    assert bir._resolve_bot(rec, cfg) == "drafter_bot"
+
+
+def test_resolve_bot_falls_back_to_stage_map():
+    cfg = _configs()[0]
+    rec = {"负责 AI": [], "阶段": ["📋 选题"]}
+    assert bir._resolve_bot(rec, cfg) == "selector_bot"
+
+
+def test_resolve_bot_returns_none_when_stage_unmapped():
+    cfg = _configs()[0]
+    rec = {"负责 AI": [], "阶段": ["未注册阶段"]}
+    assert bir._resolve_bot(rec, cfg) is None
+
+
+def test_resolve_bot_returns_none_when_record_has_neither():
+    cfg = _configs()[0]
+    rec = {"负责 AI": [], "阶段": []}
+    assert bir._resolve_bot(rec, cfg) is None
