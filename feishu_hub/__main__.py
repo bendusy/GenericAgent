@@ -261,6 +261,56 @@ def cmd_whoami(args: argparse.Namespace) -> int:
     return 0 if ident.is_ready else 1
 
 
+def cmd_bot_bridge(args: argparse.Namespace) -> int:
+    """启动单 bot daemon：消费 IM 事件 → 路由到 runner → thread reply（M3.C）。"""
+    from . import bot_bridge, bot_role, config
+
+    bots_path = Path(args.bots_file) if args.bots_file else (config.root_dir() / "bots.yaml")
+    try:
+        bots = bot_role.load_bots(bots_path)
+    except bot_role.BotRoleConfigError as e:
+        print(f"[err] bots.yaml 解析失败：{e}", file=sys.stderr)
+        return 2
+
+    if not bots:
+        print(f"[err] 未找到任何 bot 配置：{bots_path}", file=sys.stderr)
+        print("    cp docs/examples/bots.yaml.example ~/.feishu_hub/bots.yaml", file=sys.stderr)
+        return 2
+
+    # 按 --role 或 --app-id 选 bot
+    selected = None
+    for b in bots:
+        if args.role and b.role == args.role:
+            selected = b
+            break
+        if args.app_id and b.app_id == args.app_id:
+            selected = b
+            break
+    if selected is None and not (args.role or args.app_id) and len(bots) == 1:
+        selected = bots[0]
+    if selected is None:
+        print(f"[err] 多个 bot，需指定 --role 或 --app-id；可选：", file=sys.stderr)
+        for b in bots:
+            print(f"  - role={b.role} app_id={b.app_id}", file=sys.stderr)
+        return 2
+
+    print(f"[bot-bridge] start role={selected.role} app_id={selected.app_id} "
+          f"timeout={args.timeout or 'none'} max_events={args.max_events or 'none'}",
+          file=sys.stderr)
+    n = 0
+    for action in bot_bridge.run_bot(
+        selected,
+        max_events=args.max_events,
+        timeout=args.timeout,
+    ):
+        n += 1
+        print(f"[bot-bridge] #{n} src={action.source_message_id} "
+              f"reply={action.reply_message_id} exit={action.runner_exit_code} "
+              f"timeout={action.timed_out}", file=sys.stderr)
+    print(f"[bot-bridge] done, total={n}", file=sys.stderr)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="feishu_hub")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -316,6 +366,22 @@ def build_parser() -> argparse.ArgumentParser:
     indexer_sub.add_parser("migrate-schema",
                            help="幂等建 M3.D 所需 Base 字段（task_guid / host / ...）")
     p_indexer.set_defaults(func=cmd_indexer, base_token="", table_id="", full=False)
+
+    p_bot = sub.add_parser(
+        "bot-bridge",
+        help="启动单 bot daemon：监听 IM @mention → 调本机 runner → thread reply (M3.C)",
+    )
+    p_bot.add_argument("--role", default="",
+                       help="按 role 选 bot（如 reviewer / scribe）；与 --app-id 二选一")
+    p_bot.add_argument("--app-id", default="",
+                       help="按 lark-cli profile / bot app_id 精确选；优先级低于 --role")
+    p_bot.add_argument("--bots-file", default="",
+                       help="bots.yaml 路径，默认 ~/.feishu_hub/bots.yaml")
+    p_bot.add_argument("--timeout", default="",
+                       help="lark-cli event consume --timeout（如 5m / 30s）；空=不限")
+    p_bot.add_argument("--max-events", type=int, default=0,
+                       help="lark-cli event consume --max-events；0=不限")
+    p_bot.set_defaults(func=cmd_bot_bridge)
 
     return p
 
