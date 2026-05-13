@@ -63,13 +63,33 @@ def _extract_text(event: dict) -> Optional[str]:
 
 
 def _dispatch_runner(bot_name: str, prompt: str,
-                     on_pid: Callable[[int], None]) -> int:
-    """包一层，方便 tests 单点 monkeypatch（避开 dispatcher 内部细节）。
+                     on_pid: Callable[[int], None]) -> object:
+    """Resolve ``bot_name`` → :class:`BotRole` → :class:`RunSpec` →
+    :func:`dispatcher.runners.run`。
 
-    上层应保证 bot_name 对应的 bots.yaml 已注册。
+    bot_name 优先按 ``app_id`` 匹配，再退到 ``role``（base.yaml 里两种 form 都见过）。
+    base 路径不创建飞书 task —— 产物直接落 base 行（由 record_writer 处理）。
+
+    Returns:
+        :class:`dispatcher.runners.RunResult`
+    Raises:
+        ValueError: 当 bots.yaml 找不到该 bot_name。
     """
-    from feishu_hub.dispatcher import runners as _r
-    return _r._run(bot_name=bot_name, prompt=prompt, on_pid=on_pid)
+    from feishu_hub import bot_role, config
+    from feishu_hub.dispatcher import runners as _runners
+
+    bots_path = config.root_dir() / "bots.yaml"
+    bots = bot_role.load_bots(bots_path)
+    bot = next(
+        (b for b in bots if b.app_id == bot_name or b.role == bot_name),
+        None,
+    )
+    if bot is None:
+        raise ValueError(f"bot {bot_name!r} not found in bots.yaml")
+    spec = _runners.RunSpec(
+        runner=bot.runner, prompt=prompt, cwd=bot.default_cwd,
+    )
+    return _runners.run(spec, on_pid=on_pid)
 
 
 def _build_prompt(bot: str, record: dict, record_id: str) -> str:

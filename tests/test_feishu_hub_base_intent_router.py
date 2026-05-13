@@ -208,3 +208,46 @@ def test_try_handle_replies_when_no_bot_resolved(monkeypatch, tmp_path):
     assert bir.try_handle(event, configs=_configs(), registry=_FakeRegistry(),
                           reply_fn=replies.append) is True
     assert any("未绑 bot" in r for r in replies)
+
+
+# ---- Cycle 5.1: _dispatch_runner ----
+
+def test_dispatch_runner_resolves_bot_and_calls_dispatcher(monkeypatch, tmp_path):
+    from feishu_hub import bot_role, config
+    from feishu_hub.dispatcher import runners as _runners
+
+    fake_bot = bot_role.BotRole(
+        app_id="cli_selector", role="selector_bot",
+        mention_alias="选题Bot", runner="cc_headless",
+        default_cwd="/tmp/work", prompt_template="x",
+    )
+    monkeypatch.setattr(config, "root_dir", lambda: tmp_path)
+    monkeypatch.setattr(bot_role, "load_bots", lambda p: [fake_bot])
+
+    captured = {}
+
+    def fake_run(spec, ctx=None, *, on_pid=None):
+        captured["spec"] = spec
+        captured["on_pid"] = on_pid
+        return "result-sentinel"
+
+    monkeypatch.setattr(_runners, "run", fake_run)
+
+    def _on_pid(pid: int) -> None:
+        pass
+
+    result = bir._dispatch_runner("selector_bot", "do the thing", _on_pid)
+    assert result == "result-sentinel"
+    spec = captured["spec"]
+    assert spec.runner == "cc_headless"
+    assert spec.prompt == "do the thing"
+    assert spec.cwd == "/tmp/work"
+    assert captured["on_pid"] is _on_pid
+
+
+def test_dispatch_runner_raises_when_bot_unknown(monkeypatch, tmp_path):
+    from feishu_hub import bot_role, config
+    monkeypatch.setattr(config, "root_dir", lambda: tmp_path)
+    monkeypatch.setattr(bot_role, "load_bots", lambda p: [])
+    with pytest.raises(ValueError, match="not found"):
+        bir._dispatch_runner("ghost_bot", "x", lambda pid: None)
