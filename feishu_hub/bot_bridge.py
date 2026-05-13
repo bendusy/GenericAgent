@@ -1,20 +1,19 @@
-"""bot_bridge — 单 bot daemon orchestrator（M3.C T5）。
+"""bot_bridge — 单 bot daemon orchestrator（M3.C → M3.E）。
 
 把 :func:`event_bridge.consume_im` 的事件流喂给 :func:`bot_runner.handle_event`，
 单条事件异常不影响后续。一个 daemon = 一个 lark-cli profile = 一个 bot。
+
+**M3.E**：relay_task 调用（record_start / record_end）已移到 handle_event 内部；
+本模块只负责 daemon 主循环，不再 import bot_relay_task。
 """
 from __future__ import annotations
 
 import logging
 from typing import Iterator
 
-from . import bot_relay_task
-from .bot_role import BotRole, extract_message_body
+from .bot_role import BotRole
 from .bot_runner import BotAction, handle_event
 from .event_bridge import consume_im
-
-
-_MESSAGE_BRIEF_LEN = 40
 
 
 _log = logging.getLogger(__name__)
@@ -42,10 +41,4 @@ def run_bot(
             continue
         if action is None:
             continue
-        try:
-            brief = extract_message_body(event, bot)[:_MESSAGE_BRIEF_LEN]
-            bot_relay_task.record(bot=bot, action=action, message_brief=brief)
-        except Exception:
-            _log.exception("bot_relay_task.record failed: bot=%s msg=%s",
-                           bot.app_id, event.get("message_id"))
         yield action
