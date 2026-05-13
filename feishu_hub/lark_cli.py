@@ -416,6 +416,38 @@ def base_record_upsert(
                        stdout=json.dumps(body)[:500] if body else "")
 
 
+def base_record_search(
+    *,
+    base_token: str,
+    table_id: str,
+    filter_expr: str,
+    page_size: int = 100,
+    search_fields: Optional[Sequence[str]] = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    binary: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """``base +record-search``，返回 ``data.items`` 列表。
+
+    实测 lark-cli 1.0.29：``+record-search`` 仅接受 ``--json`` 一种参数形式
+    （没有 ``--filter`` / ``--query``），里头 schema 是
+    ``{"keyword":"<text>","search_fields":[...],"limit":<int>}``。
+    本封装把入参 ``filter_expr`` 映射成 ``keyword``，``page_size`` → ``limit``。
+    """
+    payload: Dict[str, Any] = {"keyword": filter_expr, "limit": page_size}
+    if search_fields:
+        payload["search_fields"] = list(search_fields)
+    argv = [
+        "base", "+record-search",
+        "--base-token", base_token,
+        "--table-id", table_id,
+        "--json", json.dumps(payload, ensure_ascii=False),
+        "--format", "json",
+    ]
+    body = run_json(argv, timeout=timeout, binary=binary)
+    items = _pluck(body, ("data", "items"))
+    return list(items) if isinstance(items, list) else []
+
+
 # ---- 组合便利函数 ---------------------------------------------------------
 
 def find_or_create_folder(
