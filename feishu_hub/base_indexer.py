@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from feishu_hub.lark_cli import LarkCLIError, run_json
+from feishu_hub.lark_cli import LarkCLIError, base_record_list, run_json
 
 # --- summary 解析 ---------------------------------------------------------
 
@@ -388,6 +388,77 @@ def _save_last_run(summary: IndexerRunSummary) -> None:
         "total": summary.total,
     }
     p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# --- M4.C Phase 6: reconcile stale running --------------------------------
+
+def reconcile_stale_running(
+    *,
+    configs: Optional[List[Any]] = None,
+    registry: Optional[Any] = None,
+) -> int:
+    """扫所有 role Base：``运行状态==running`` 但本机无活 runner → 标 failed。
+
+    兜底机制：runner 异常退出（OOM kill / 断电 / 进程崩溃后未走清理路径）会让
+    Base 上的「运行状态」永远停在 ``running``。本 job 周期性扫描，把没人收尾
+    的 row 标成 ``failed`` 并附 reconcile 备注，避免看板假阳性。
+
+    返回修复的记录数；幂等可重复调用。
+    """
+    import logging
+    from feishu_hub import base_config, runner_registry
+    from feishu_hub.record_writer import STATE_FIELD, append_product, set_run_state
+
+    log = logging.getLogger(__name__)
+    cfgs = configs if configs is not None else base_config.load_all()
+    reg = registry or runner_registry.RunnerRegistry()
+    n_fixed = 0
+    for cfg in cfgs:
+        offset = 0
+        while True:
+            try:
+                data = base_record_list(
+                    base_token=cfg.base_token,
+                    table_id=cfg.table_id,
+                    limit=100,
+                    offset=offset,
+                )
+            except LarkCLIError as e:
+                log.warning("reconcile: record-list failed role=%s code=%s",
+                            cfg.role, e.code)
+                break
+            items = data.get("items") or []
+            for r in items:
+                fields = r.get("fields") or {}
+                state_val = fields.get(STATE_FIELD)
+                if isinstance(state_val, list):
+                    state = state_val[0] if state_val else ""
+                else:
+                    state = state_val or ""
+                if state != "running":
+                    continue
+                rid = r.get("record_id") or ""
+                if not rid:
+                    continue
+                if reg.lookup_by_record_id(rid):
+                    continue
+                # 本机没人收 → 兜底失败
+                try:
+                    set_run_state(record_id=rid, state="failed",
+                                  base_token=cfg.base_token, table_id=cfg.table_id)
+                    append_product(record_id=rid,
+                                   text="--- reconcile：本机无 runner，兜底改 failed ---",
+                                   base_token=cfg.base_token, table_id=cfg.table_id)
+                    n_fixed += 1
+                except Exception:  # noqa: BLE001
+                    log.exception("reconcile fix failed: record_id=%s", rid)
+            if not data.get("has_more"):
+                break
+            if not items:
+                # defensive: empty page but has_more=true → 避免死循环
+                break
+            offset += len(items)
+    return n_fixed
 
 
 def load_last_run() -> Optional[Dict[str, Any]]:

@@ -292,3 +292,93 @@ class TestRunIndexer:
         run_indexer(base_token="b", table_id="t", full=True)
         # cursor 应推进到该任务的 updated_at（×1000 转 us）
         assert load_cursor() > 0
+
+
+# --- M4.C Phase 6: reconcile_stale_running -------------------------------
+
+class TestReconcileStaleRunning:
+    @patch("feishu_hub.base_indexer.base_record_list")
+    def test_marks_orphan_as_failed(self, list_mock, tmp_path, monkeypatch):
+        monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+        from feishu_hub.base_config import BaseConfig
+        from feishu_hub.runner_registry import RunnerEntry, RunnerRegistry
+        from feishu_hub.base_indexer import reconcile_stale_running
+
+        cfg = BaseConfig(role="R", base_token="bt", table_id="tbl",
+                        stage_to_bot={"S": "B"})
+        list_mock.return_value = {
+            "items": [
+                {"record_id": "recA", "fields": {"运行状态": ["running"]}},
+                {"record_id": "recB", "fields": {"运行状态": ["running"]}},
+                {"record_id": "recC", "fields": {"运行状态": ["idle"]}},
+            ],
+            "has_more": False,
+        }
+
+        registry = RunnerRegistry()
+        import os
+        # only recA has a local live runner
+        registry.register(RunnerEntry(
+            task_guid="base-recA", task_url="u",
+            runner_pid=os.getpid(),
+            bot_app_id="cli", chat_id="c", source_message_id="m",
+            started_at="2026-01-01T00:00:00",
+            record_id="recA", base_token="bt", table_id="tbl",
+        ))
+
+        with patch("feishu_hub.record_writer.base_record_upsert") as upsert, \
+             patch("feishu_hub.record_writer.base_record_get") as getrec:
+            getrec.return_value = {}
+            upsert.return_value = "recB"
+            n = reconcile_stale_running(configs=[cfg], registry=registry)
+        assert n == 1
+        # set_run_state + append_product both call upsert → ≥2 calls for the 1 fixed row
+        # but only recB should be touched (state set to failed exactly once)
+        state_calls = [c for c in upsert.call_args_list
+                       if c.kwargs.get("fields", {}).get("运行状态") == "failed"]
+        assert len(state_calls) == 1
+        assert state_calls[0].kwargs["record_id"] == "recB"
+
+    @patch("feishu_hub.base_indexer.base_record_list")
+    def test_paginates_through_has_more(self, list_mock, tmp_path, monkeypatch):
+        monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+        from feishu_hub.base_config import BaseConfig
+        from feishu_hub.runner_registry import RunnerRegistry
+        from feishu_hub.base_indexer import reconcile_stale_running
+
+        cfg = BaseConfig(role="R", base_token="bt", table_id="tbl",
+                        stage_to_bot={"S": "B"})
+        list_mock.side_effect = [
+            {"items": [{"record_id": "rec1", "fields": {"运行状态": ["idle"]}}],
+             "has_more": True},
+            {"items": [{"record_id": "rec2", "fields": {"运行状态": ["idle"]}}],
+             "has_more": False},
+        ]
+        reconcile_stale_running(configs=[cfg], registry=RunnerRegistry())
+        assert list_mock.call_count == 2
+
+    @patch("feishu_hub.base_indexer.base_record_list")
+    def test_returns_zero_when_nothing_to_fix(self, list_mock, tmp_path, monkeypatch):
+        monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+        from feishu_hub.base_config import BaseConfig
+        from feishu_hub.runner_registry import RunnerRegistry
+        from feishu_hub.base_indexer import reconcile_stale_running
+
+        cfg = BaseConfig(role="R", base_token="bt", table_id="tbl",
+                        stage_to_bot={"S": "B"})
+        list_mock.return_value = {"items": [], "has_more": False}
+        assert reconcile_stale_running(configs=[cfg], registry=RunnerRegistry()) == 0
+
+    @patch("feishu_hub.base_indexer.base_record_list")
+    def test_skips_when_record_list_raises(self, list_mock, tmp_path, monkeypatch):
+        """LarkCLIError 时不应炸；该 role 跳过即可（避免阻塞其他 role）。"""
+        monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+        from feishu_hub.lark_cli import LarkCLIError
+        from feishu_hub.base_config import BaseConfig
+        from feishu_hub.runner_registry import RunnerRegistry
+        from feishu_hub.base_indexer import reconcile_stale_running
+
+        cfg = BaseConfig(role="R", base_token="bt", table_id="tbl",
+                        stage_to_bot={"S": "B"})
+        list_mock.side_effect = LarkCLIError(99, "x", ["base"])
+        assert reconcile_stale_running(configs=[cfg], registry=RunnerRegistry()) == 0
