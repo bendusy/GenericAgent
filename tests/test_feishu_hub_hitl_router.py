@@ -170,3 +170,56 @@ def test_dispatch_schedules_sigkill_after_sigterm(monkeypatch, tmp_path):
     assert decision is not None
     assert (42424, signal.SIGTERM) in sigs
     assert scheduled == [(42424, hr.ABORT_GRACE_S)]
+
+
+def test_extract_adjust_recognizes_prefix():
+    from feishu_hub.hitl_router import _extract_adjust
+    assert _extract_adjust("/adjust 加点细节") == "加点细节"
+    assert _extract_adjust("调整 跑短点") == "跑短点"
+    assert _extract_adjust("/adjust\n多行调整") == "多行调整"
+
+
+def test_extract_adjust_returns_none_for_no_match():
+    from feishu_hub.hitl_router import _extract_adjust
+    assert _extract_adjust("just chatting") is None
+    assert _extract_adjust("/stop") is None
+    assert _extract_adjust("/adjust") is None  # 缺 body / 缺分隔符
+
+
+def test_extract_adjust_returns_none_for_empty_body():
+    from feishu_hub.hitl_router import _extract_adjust
+    assert _extract_adjust("/adjust   ") is None
+    assert _extract_adjust("/adjust \n") is None
+
+
+def test_dispatch_adjust_path_writes_adjust_sentinel(registry, monkeypatch):
+    """命中 /adjust：写 .adjust sentinel（不是 .abort）+ SIGTERM + reason=/adjust: ..."""
+    import os, signal, threading
+    monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(
+        "feishu_hub.hitl_router._schedule_sigkill",
+        lambda pid, grace_s=10.0: threading.Timer(60.0, lambda: None),
+    )
+    registry.register(_entry(chat_id="oc_x", pid=11111))
+    decision = dispatch(_envelope(content="/adjust 跑短点"),
+                       registry=registry)
+    assert decision is not None
+    assert decision.reason == "/adjust: 跑短点"
+    assert registry.read_adjust_sentinel("t-oc_x") == "跑短点"
+    assert registry.read_abort_sentinel("t-oc_x") is None  # 不写 abort
+
+
+def test_dispatch_abort_path_unchanged(registry, monkeypatch):
+    """命中 /stop：仍写 .abort sentinel，不写 .adjust。"""
+    import os, signal, threading
+    monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(
+        "feishu_hub.hitl_router._schedule_sigkill",
+        lambda pid, grace_s=10.0: threading.Timer(60.0, lambda: None),
+    )
+    registry.register(_entry(chat_id="oc_x", pid=11111))
+    decision = dispatch(_envelope(content="/stop"), registry=registry)
+    assert decision is not None
+    assert decision.reason == "/stop"
+    assert registry.read_abort_sentinel("t-oc_x") == "/stop"
+    assert registry.read_adjust_sentinel("t-oc_x") is None

@@ -46,6 +46,8 @@ def _schedule_sigkill(pid: int, grace_s: float = ABORT_GRACE_S) -> threading.Tim
 
 ABORT_KEYWORDS = ("/stop", "/abort", "停", "中止")
 
+ADJUST_PREFIX = ("/adjust ", "/adjust\n", "调整 ", "调整\n")
+
 
 @dataclass(frozen=True)
 class AbortDecision:
@@ -63,6 +65,16 @@ def _matched_keyword(text: str) -> Optional[str]:
     return None
 
 
+def _extract_adjust(text: str) -> Optional[str]:
+    """text 以 ADJUST_PREFIX 任一开头 → 返回剥前缀后的 body；空 body 返回 None。"""
+    s = text.strip()
+    for p in ADJUST_PREFIX:
+        if s.startswith(p):
+            body = s[len(p):].strip()
+            return body or None
+    return None
+
+
 def dispatch(
     envelope: Dict[str, Any],
     *,
@@ -72,6 +84,34 @@ def dispatch(
     content = envelope.get("content") or ""
     if not isinstance(content, str):
         return None
+
+    # adjust 优先（含 body，更具体）
+    supplement = _extract_adjust(content)
+    if supplement is not None:
+        chat_id = envelope.get("chat_id") or ""
+        if not chat_id:
+            return None
+        entry = registry.lookup_by_chat_id(chat_id)
+        if entry is None:
+            return None
+        registry.write_adjust_sentinel(entry.task_guid, supplement)
+        try:
+            os.kill(entry.runner_pid, signal.SIGTERM)
+        except ProcessLookupError:
+            _log.warning("hitl_router: pid %s already gone for adjust chat=%s task=%s",
+                         entry.runner_pid, chat_id, entry.task_guid)
+        except PermissionError:
+            _log.error("hitl_router: PermissionError kill pid=%s adjust chat=%s",
+                       entry.runner_pid, chat_id)
+            return None
+        else:
+            _schedule_sigkill(entry.runner_pid)
+        return AbortDecision(
+            chat_id=chat_id, task_guid=entry.task_guid,
+            runner_pid=entry.runner_pid, reason=f"/adjust: {supplement}",
+        )
+
+    # abort 路径（既有）
     kw = _matched_keyword(content)
     if kw is None:
         return None
