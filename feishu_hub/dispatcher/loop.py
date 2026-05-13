@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from feishu_hub import journal
+from feishu_hub import task_writer
 
 from . import budget as budget_mod
 from . import rules as rules_mod
@@ -60,6 +61,29 @@ def _refusal(emit: EmitFn, event_type: str, *, rule_name: str, runner: str,
     payload = _base_envelope(event_type, rule_name=rule_name, runner=runner, ctx=ctx)
     payload["summary"] = reason
     emit(payload)
+
+
+def _maybe_append_task_step(incoming: Mapping[str, Any],
+                             result_payload: Mapping[str, Any]) -> None:
+    """若触发 envelope 的 actor.task_guid 存在，把 runner 结果作为一步写入飞书 Task。
+
+    task_guid 取自 ``incoming``（原始触发事件），因为 dispatcher 输出 envelope 的
+    actor 字段是用 ``journal.actor_from_env()`` 重建的，不会继承 incoming.actor。
+    任何失败都仅记 stderr，不影响主流程。
+    """
+    actor = incoming.get("actor") or {}
+    task_guid = actor.get("task_guid")
+    if not task_guid:
+        return
+    cmd = result_payload.get("command") or {}
+    runner = (cmd.get("argv") or ["?"])[0]
+    exit_code = cmd.get("exit_code", "?")
+    summary = result_payload.get("summary") or f"{runner} done (exit {exit_code})"
+    try:
+        task_writer.append_steps(task_guid, [summary])
+    except Exception as e:
+        import sys
+        sys.stderr.write(f"[dispatcher] task step append failed: {e}\n")
 
 
 # ---- 主入口 -------------------------------------------------------------
@@ -182,6 +206,9 @@ def dispatch_event(event: Mapping[str, Any], dctx: DispatchContext) -> int:
             payload.setdefault("metrics", {})["tokens"] = result.tokens
         dctx.emit(payload)
         executed += 1
+
+        # 7.5) 若 incoming envelope 带 task_guid，把这次 dispatch 结果写一步进飞书 Task
+        _maybe_append_task_step(event, payload)
 
         # 8) 回路闭环 — result_writeback 把结果发回原始会话
         _writeback(rule, event, result, ctx, dctx)
