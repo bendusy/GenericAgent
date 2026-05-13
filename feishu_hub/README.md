@@ -377,7 +377,13 @@ python -m feishu_hub indexer status
 
 **未做**：双 bot 双机真机 e2e（idempotency dedupe 服务端已验证，链路只剩跨机 e2e 没跑）。代码层全套 473 tests 绿，单机单 bot smoke 通过（2026-05-14：run 2 拿到 src=om_xxx → reply=om_yyy → relay_task=fa180257-...）。
 
-#### 多机部署模型（这套架构最关键的一条认知）
+#### 北极星：agent 网络 / 数字分身（M3.C 是这条路的第一步）
+
+> 真正的目标：**每个用户都有自己的 agent 在飞书代表他，整个团队变成一个 agent 网络**——人提出目标 / 拍板，agent 在前面跑事；agent 之间通过飞书 IM 互相 @ 接力交付；过程对人完全可见、能插话、能打断、能纠偏；重要事不会漏。
+
+M3.C 5 模块（event_bridge / bot_role / bot_runner / bot_relay_task / bot_bridge）= 这条路的第一步，**做了底座的"反向触发 → 本机 AI 跑活 → 写回飞书"链路**。还差很多（HITL 中断 / workflow 复用 / SOP 传递 / multi-identity 分类），见 `docs/FEISHU_HUB_REQUIREMENTS.md`。
+
+#### 多机部署的工程实现细节
 
 **这套不是主从，是「角色分片 + 飞书做 message broker」。**
 
@@ -389,16 +395,18 @@ python -m feishu_hub indexer status
    └─ @sandbox     →  机器 C 上的 sandbox  bot daemon （消费 app_C 的 event bus）
 ```
 
-为什么这样可行：
+工程性质：
 
-1. **路由原语是 IM @mention，不是 IP/SSH/hostname**。任何能 @ 这个 bot 的人或 bot 都能调度它，调度做在飞书侧。
-2. **leader election 由飞书物理约束代办**。"一个 bot app 全局只能有一个 event bus" → 每个 bot 在全网必然只有一台机响应，不需要任何选主代码。
-3. **加机器 = 声明式**。飞书开放平台新建 app → 那台机 `lark-cli profile add` → bots.yaml 加一条 → 启 daemon。零中心化协调。
-4. **跨机共享状态靠 server-side idempotency + 统一身份写手**。`bot_relay_task` 的 chat → task 映射用 `idempotency_key='m3c-relay-task:<chat_id>'`，但飞书 task `--idempotency-key` 是 **per-bot-app namespace**——两个不同 bot 用同 key 各拿各的 guid（实测）。解决方案：`BotRole.relay_writer_app_id` 字段，把所有机器的 relay_task 都绑到同一指定 bot 身份（lark-cli `--profile X`）下调用，靠 idempotency 在 TTL 窗口内（约 30 min）跨机收敛同 guid。部署前提：写手 bot 的 lark-cli profile 必须装在每一台 daemon 机上且 token 有效。每机的 `~/.feishu_hub/state/m3c_chats/` 是只读优化层。
-5. **机器宕机/掉线 = 那个 bot 没响应**。飞书 thread 里"等待 reply"卡住，肉眼可见；本机 `python -m feishu_hub status` 能看 daemon 进程死活。不需要心跳服务。
-6. **机器之间不需要任何网络通道**。A 的 reviewer 干完 `@scribe` → B 的 scribe 接住，走的全是飞书 IM。本机防火墙再严都不影响。
+1. **路由原语是 IM @mention，不是 IP/SSH/hostname**。调度做在飞书侧。
+2. **leader election 由飞书物理约束代办**。"一个 bot app 全局只能有一个 event bus" → 不需要选主代码。
+3. **加机器 = 声明式**。飞书开放平台新建 app → 那台机 `lark-cli profile add` → bots.yaml 加一条 → 启 daemon。
+4. **跨机共享状态靠 server-side idempotency + 统一身份写手**。`bot_relay_task` 的 chat → task 映射用 `idempotency_key='m3c-relay-task:<chat_id>'`；飞书 task `--idempotency-key` 是 **per-bot-app namespace**——通过 `BotRole.relay_writer_app_id` 字段把所有机器的 relay_task 绑到同一身份写手，在 TTL ~30min 内跨机收敛同 guid。
+5. **机器宕机/掉线 = 那个 bot 没响应**。飞书 thread "等待 reply" 肉眼可见；`python -m feishu_hub status` 看 daemon 死活。不需要心跳服务。
+6. **机器之间不需要任何网络通道**。所有通信走飞书 IM。
 
-引申：**飞书 IM thread 就是这套分布式 agent 系统的 message broker，飞书 Task 就是它的工作流引擎**。不需要部署 Kafka / NATS / Temporal——飞书把这两件事都已经做了，而且自带 UI（thread 回放 + 我的待办时间线）。
+引申：飞书 IM thread = 这套系统的 message broker；飞书 task = 工作流引擎。不需 Kafka / NATS / Temporal。
+
+**注意 ⚠️**：`relay_writer_app_id` 是当前 per-bot-app idempotency 限制的补丁，**不是长期方案**。等 workflow template 概念落地后会重构。详见 REQUIREMENTS R12/R14。
 
 详细心智模型见 memory `feishu_m3c_multimachine.md`。
 
