@@ -87,6 +87,147 @@ python -m feishu_hub smoke
 
 ---
 
+## 给 AI agent 的安装协议（machine-readable onboarding）
+
+> **如果你是被用户邀请来帮忙装这个模块的 AI agent**（CC / Codex / GA / Cursor / 任何带 Bash 工具的 agent），照本节执行。每一步给你：要跑的命令 / 期望输出特征 / 失败时往哪查 / 何时必须停下问用户。
+>
+> **设计前提**：用户已经把这个 repo 拉到本地，且当前 shell 在 repo 根目录。
+
+### 0. 前置检查（30 秒）
+
+```bash
+node --version   # 期望 ≥ 18
+python3 --version   # 期望 ≥ 3.10
+which jq || echo "MISSING: jq"   # macOS: brew install jq；Linux: apt install jq
+git rev-parse --is-inside-work-tree   # 期望 true
+```
+
+**失败处理**：缺什么装什么；jq 缺失会让 Stop hook 静默退化为"无 summary"，不影响主流程但弱化体验。
+
+### 1. 装 lark-cli + 它的 skill 包
+
+```bash
+npm install -g @larksuite/cli
+lark-cli --version   # 期望出 1.0.28 或更高
+npx skills add larksuite/cli -y -g
+```
+
+**为什么**：lark-cli 是飞书官方 CLI；skill 包给 lark-cli 配套"AI agent 友好的工具说明"（你后续可能会读到 `~/.local/lib/node_modules/@larksuite/cli/skills/` 或类似路径下的 SKILL.md）。
+
+**停下问用户**：如果 lark-cli 版本 ≥ 1.1.0，**先停下报告版本号**——本仓库锁 1.0.28 实测兼容，更高版本可能有 schema 漂移（特别是 `task agent_task_step_info append_task_steps` 的 timestamp 字段）。
+
+### 2. 让用户建一个自己的飞书 app（无法替代）
+
+```bash
+lark-cli config init --new
+```
+
+这条命令会输出一个**授权 URL**，你必须：
+1. 把 URL 从命令输出里抽出来
+2. 发给用户让他在浏览器打开
+3. 等用户在飞书开放平台完成 app 创建 + 授权
+4. 命令会自己退出
+
+**为什么用户必须自己建**：飞书 app 是用户级资源（appId/appSecret 归属用户飞书账号），你不能给他用别人的 appId，也没有"官方共享 app"。
+
+**期望输出**：`~/.config/lark-cli/` 或类似路径出现配置文件；`lark-cli auth status` 不再报"no app configured"。
+
+### 3. 用户身份授权（user_access_token）
+
+```bash
+lark-cli auth login --scope "task:task:write task:task:read im:message im:message.send_as_user contact:user.base:readonly docs:document:write_only docs:document.content:read drive:file:upload drive:file:download base:app:read base:record:read base:record:create base:record:update"
+```
+
+这条同样会输出授权 URL；同步骤 2 的处理方式。
+
+**为什么这些 scope**：
+- `task:*` — M3.B 主路径写飞书任务
+- `im:*` — IM 兜底（task 路径失败时）
+- `contact:user.base:readonly` — 拿用户自己的 open_id（下一步用）
+- `docs:*` + `drive:*` — daily_report 写日报 docx
+- `base:*` — M2 历史兼容（M3.D 索引层后会用到）
+
+**期望输出**：`lark-cli auth status --jq '.tokenStatus'` 返回 `"valid"`。
+
+### 4. 拿用户的 open_id 设环境变量
+
+```bash
+USER_OPEN_ID=$(lark-cli contact +get-user --as user --jq '.open_id')
+echo "User open_id: $USER_OPEN_ID"
+```
+
+把这一行加进用户的 shell rc（`~/.zshrc` / `~/.bashrc`）：
+
+```bash
+export FEISHU_NOTIFY_TO=ou_xxxxx   # 把 $USER_OPEN_ID 实际值填进去
+```
+
+**为什么**：Stop hook 用 `FEISHU_NOTIFY_TO` 决定把 task follower 设为谁。如果不设，hook 静默退出（无错但也无飞书侧产出）。
+
+### 5. 初始化 feishu_hub 本机配置
+
+```bash
+python3 -m feishu_hub init
+```
+
+这条会：
+- 建 `~/.feishu_hub/{journal,state,bin}/` 目录树
+- 部署 `~/.feishu_hub/bin/agent-stop-notify.sh`（Stop hook 用）
+- 把 CC `~/.claude/settings.json` + Codex `~/.codex/hooks.json` 的 Stop hook merge 进去（不覆盖已有 hooks）
+- 在 PATH 前部署 lark-cli shim（透传真实 lark-cli + 落 journal）
+- 引导用户填 `notify_receive_id`（如果环境变量 `FEISHU_NOTIFY_TO` 已设，自动用它）
+
+**停下问用户**：如果 init 提问 `daily_report.root_folder_token`（飞书云空间根文件夹），用户没建过的话直接回车跳过即可，daily_report 走个人空间。
+
+### 6. 跑 smoke 探针验收
+
+```bash
+python3 -m feishu_hub smoke
+```
+
+**期望输出**：6 个 probe 全 `ok: true`（`im_messages_send` / `docs_create_v2` / `docs_update_overwrite` / `drive_files_list` / `drive_create_folder` / `drive_move`）。
+
+**任一失败就停下**：把失败 probe 名 + 它返回的飞书 error code 给用户，多半是 scope 缺漏或 token 过期。**不要**自己试着 `auth login --recommend` 拿全 scope——那会授权一堆用不到的权限，违反最小授权。
+
+### 7. 跑一次真实 CC 会话验收端到端
+
+```bash
+# 跑任意 CC headless 命令，让它正常退出触发 Stop hook
+claude -p "say hello" >/dev/null
+```
+
+**期望**：用户飞书 app 出现一条新任务，标题形如 `[cc] @<basename(cwd)>`，点开能看到 1 条 step（任务摘要）。
+
+**如果飞书没出现任务**：
+```bash
+tail -20 ~/.feishu_hub/journal/$(date +%Y-%m-%d).jsonl   # 看 stop_hook 那次调用的 envelope
+```
+日志里如果有 `lark_cli.invoke` 但是 `exit_code != 0`，看 `io.stderr_head` 字段拿 lark-cli 错误码，再针对性排查。
+
+### 8. 把成功状态告诉用户
+
+完成后给用户报告：
+- lark-cli 版本号
+- user open_id
+- 测试 task 在飞书 app 里的 URL（从 journal 里抽 task_guid 拼 `https://applink.feishu.cn/client/todo/detail?guid=<guid>`）
+- 一条总结："Stop hook 已激活，下次 CC/Codex 完成任务会自动写飞书任务流"
+
+### 失败兜底
+
+任何一步卡住超过 3 次重试，**停下报告"BLOCKED on step N: <错误摘要>"，让用户决定**。不要在用户没看到的情况下静默 fallback 到旧路径（比如直接发 IM text），这违反"对用户透明"原则。
+
+### 多机部署（同账号不同 bot）
+
+如果用户同一个飞书账号在另一台机器（如 axis）也跑 GA：
+
+- 第 2 步在 **每台机器各建一个独立 app**（不要共享 appSecret），这样 `appId` 维度可区分两台机器
+- 第 4 步 `FEISHU_NOTIFY_TO` 都填**同一个 user open_id**（user 是同一人）
+- 第 5 步 init 各自独立——不要拷贝 `~/.feishu_hub/state/` 跨机器
+- 用户在飞书 app 看到的是：两个不同 bot 创建的 task，task 收件箱里都属于同一个 follower（用户自己）；可以从 task 详情的 "创建者" 字段区分来自哪台机器
+- 跨机协同（一台 bot @mention 另一台 bot）属 M3.C 范围，本期暂不接
+
+---
+
 ## 变更历史
 
 ### M3.A — 清理与降维（2026-05-13）
