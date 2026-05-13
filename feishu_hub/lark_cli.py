@@ -357,6 +357,29 @@ def drive_create_folder(
     return token
 
 
+# ---- base 记录读写 -------------------------------------------------------
+
+def base_record_get(
+    *,
+    base_token: str,
+    table_id: str,
+    record_id: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    binary: Optional[str] = None,
+) -> Dict[str, Any]:
+    """``base +record-get --format json``，返回 ``data.record.fields`` 字段映射。"""
+    argv = [
+        "base", "+record-get",
+        "--base-token", base_token,
+        "--table-id", table_id,
+        "--record-id", record_id,
+        "--format", "json",
+    ]
+    body = run_json(argv, timeout=timeout, binary=binary)
+    fields = _pluck(body, ("data", "record", "fields"))
+    return fields if isinstance(fields, dict) else {}
+
+
 # ---- 组合便利函数 ---------------------------------------------------------
 
 def find_or_create_folder(
