@@ -10,6 +10,16 @@ from feishu_hub import bot_role as br
 from feishu_hub.bot_runner import BotAction
 
 
+@pytest.fixture(autouse=True)
+def _isolate_relay_task(monkeypatch):
+    """所有 bot_bridge 测试默认 mock bot_relay_task.record，防止真打飞书 API。
+
+    单独需要观察 record 行为的测试自己再覆盖 monkeypatch.setattr。
+    """
+    monkeypatch.setattr(bb.bot_relay_task, "record",
+                        lambda **kw: None)
+
+
 def _bot(**over) -> br.BotRole:
     base = dict(
         app_id="cli_aaa",
