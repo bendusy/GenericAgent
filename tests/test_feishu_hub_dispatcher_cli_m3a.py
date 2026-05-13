@@ -1,12 +1,18 @@
 """M3.A 契约：cli 模块不再 import bitable_writer / 不再有 tail 子命令。"""
 import importlib
+import sys
 
 
 def test_cli_does_not_import_bitable_writer():
-    cli = importlib.import_module("feishu_hub.dispatcher.cli")
-    # 模块 namespace 不应含 bitable_writer
-    assert not hasattr(cli, "bitable_writer"), \
-        "M3.A: cli.py 不应再 import bitable_writer"
+    # 清掉 cache 强制重新加载，避免之前的测试污染
+    for key in [k for k in sys.modules if k.startswith("feishu_hub.dispatcher")]:
+        del sys.modules[key]
+
+    importlib.import_module("feishu_hub.dispatcher.cli")
+
+    # 检查 import 链上不应触及 bitable_writer 模块（覆盖：直接 import / 别名 import / from x import y）
+    assert "feishu_hub.dispatcher.bitable_writer" not in sys.modules, \
+        "M3.A: cli.py import 链不应触及 bitable_writer 模块"
 
 
 def test_cli_has_no_tail_subcommand():
