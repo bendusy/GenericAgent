@@ -90,3 +90,83 @@ def test_dispatch_ignores_keyword_in_middle_of_message(registry, monkeypatch):
     registry.register(_entry(chat_id="oc_x", pid=11111))
     assert dispatch(_envelope(content="快 /stop 啊"),
                     registry=registry) is None
+
+
+def test_schedule_sigkill_fires_after_grace_when_pid_alive(monkeypatch):
+    """grace 内子进程没退 → SIGKILL 真被发出。"""
+    import subprocess
+    import sys
+    import time
+    from feishu_hub.hitl_router import _schedule_sigkill
+
+    # 起一个 SIGTERM-immune 子进程：trap SIGTERM 不做事，sleep 60
+    code = (
+        "import signal, time; "
+        "signal.signal(signal.SIGTERM, lambda *_: None); "
+        "time.sleep(60)"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", code])
+    try:
+        # 给它 50ms 起来
+        time.sleep(0.05)
+        assert proc.poll() is None, "child should still be alive"
+        # 发 SIGTERM（被 trap 吸收）+ schedule SIGKILL with tiny grace
+        os.kill(proc.pid, signal.SIGTERM)
+        timer = _schedule_sigkill(proc.pid, grace_s=0.2)
+        timer.join(timeout=1.0)
+        # SIGKILL 应已发出；子进程 0.5s 内死
+        for _ in range(50):
+            if proc.poll() is not None:
+                break
+            time.sleep(0.01)
+        assert proc.poll() is not None, "SIGKILL did not kill the child"
+        assert proc.returncode == -9
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+
+
+def test_schedule_sigkill_silently_swallows_when_pid_already_dead(monkeypatch):
+    """grace 时 pid 已死 → ProcessLookupError 被吞，不抛。"""
+    import time
+    from feishu_hub.hitl_router import _schedule_sigkill
+
+    # 用一个保证不存在的 pid（极大值）
+    timer = _schedule_sigkill(99999999, grace_s=0.05)
+    timer.join(timeout=1.0)
+    # 不应抛——能跑到这里就过
+
+
+def test_dispatch_schedules_sigkill_after_sigterm(monkeypatch, tmp_path):
+    """命中 abort 后既写 sentinel 又 schedule SIGKILL。"""
+    import threading
+    from feishu_hub import hitl_router as hr
+    from feishu_hub.runner_registry import RunnerEntry, RunnerRegistry
+
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+
+    sigs = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: sigs.append((pid, sig)))
+
+    scheduled = []
+    def fake_schedule(pid, grace_s=hr.ABORT_GRACE_S):
+        scheduled.append((pid, grace_s))
+        t = threading.Timer(60.0, lambda: None)
+        t.daemon = True
+        return t
+    monkeypatch.setattr(hr, "_schedule_sigkill", fake_schedule)
+
+    reg = RunnerRegistry()
+    reg.register(RunnerEntry(
+        task_guid="t1", task_url="u", runner_pid=42424,
+        bot_app_id="cli_x", chat_id="oc_y",
+        source_message_id="om_x", started_at="2026-05-13T00:00:00+08:00",
+    ))
+
+    env = {"content": "/stop", "chat_id": "oc_y", "message_id": "om_z",
+           "sender_id": "ou_user"}
+    decision = hr.dispatch(env, registry=reg)
+    assert decision is not None
+    assert (42424, signal.SIGTERM) in sigs
+    assert scheduled == [(42424, hr.ABORT_GRACE_S)]

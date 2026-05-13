@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -23,6 +24,25 @@ from .runner_registry import RunnerRegistry
 
 
 _log = logging.getLogger(__name__)
+
+ABORT_GRACE_S = 10.0  # SIGTERM 之后等多久仍未退 → SIGKILL 兜底
+
+
+def _schedule_sigkill(pid: int, grace_s: float = ABORT_GRACE_S) -> threading.Timer:
+    """SIGTERM 之后 grace_s 兜底 SIGKILL。pid 已死时 silently 吞 ProcessLookupError。"""
+    def _kill9() -> None:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            _log.warning("hitl_router: SIGKILL fallback fired for pid=%s", pid)
+        except ProcessLookupError:
+            pass  # 已优雅退，理想路径
+        except PermissionError:
+            _log.error("hitl_router: SIGKILL fallback PermissionError pid=%s", pid)
+    t = threading.Timer(grace_s, _kill9)
+    t.daemon = True
+    t.start()
+    return t
+
 
 ABORT_KEYWORDS = ("/stop", "/abort", "停", "中止")
 
@@ -71,6 +91,8 @@ def dispatch(
         _log.error("hitl_router: PermissionError kill pid=%s chat=%s",
                    entry.runner_pid, chat_id)
         return None
+    else:
+        _schedule_sigkill(entry.runner_pid)
     return AbortDecision(
         chat_id=chat_id, task_guid=entry.task_guid,
         runner_pid=entry.runner_pid, reason=kw,
