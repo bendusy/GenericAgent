@@ -113,3 +113,76 @@ def test_run_bot_does_not_reference_bot_relay_task(monkeypatch):
     """
     assert not hasattr(bb, "bot_relay_task"), \
         "bot_bridge should not import bot_relay_task in M3.E"
+
+
+def test_run_bot_calls_cleanup_orphans_on_start(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    from feishu_hub import runner_registry
+    cleaned = []
+    monkeypatch.setattr(
+        runner_registry.RunnerRegistry, "cleanup_orphans",
+        lambda self: cleaned.append(True) or 0,
+    )
+    monkeypatch.setattr(bb, "consume_im", lambda **kw: iter([]))
+    list(bb.run_bot(_bot()))
+    assert cleaned == [True]
+
+
+def test_run_bot_routes_event_to_hitl_router_first(monkeypatch):
+    """abort 命中的事件不进 handle_event。"""
+    events = [
+        {"message_id": "om_1", "chat_id": "oc_x"},  # 假装 hitl 命中
+        {"message_id": "om_2", "chat_id": "oc_x"},  # 进 handle_event
+    ]
+    seen = []
+
+    def fake_consume(**_):
+        yield from events
+
+    def fake_handle(ev, b):
+        seen.append(ev["message_id"])
+        return _ok_action(source_message_id=ev["message_id"])
+
+    from feishu_hub import hitl_router
+    calls = []
+    def fake_dispatch(envelope, *, registry):
+        calls.append(envelope["message_id"])
+        if envelope["message_id"] == "om_1":
+            from feishu_hub.hitl_router import AbortDecision
+            return AbortDecision(chat_id="oc_x", task_guid="t",
+                                 runner_pid=1, reason="/stop")
+        return None
+
+    monkeypatch.setattr(bb, "consume_im", fake_consume)
+    monkeypatch.setattr(bb, "handle_event", fake_handle)
+    monkeypatch.setattr(hitl_router, "dispatch", fake_dispatch)
+
+    actions = list(bb.run_bot(_bot()))
+    assert calls == ["om_1", "om_2"]
+    assert seen == ["om_2"]  # om_1 被 hitl 拦
+    assert [a.source_message_id for a in actions] == ["om_2"]
+
+
+def test_run_bot_parallel_dispatches_handle_event_in_threads(monkeypatch):
+    """parallel=True：handle_event 在 worker thread 跑；可乱序但全跑过。"""
+    import threading
+    events = [{"message_id": f"om_{i}", "chat_id": "oc_x"} for i in range(3)]
+    main_tid = threading.get_ident()
+    worker_tids = []
+
+    def fake_consume(**_):
+        yield from events
+
+    def fake_handle(ev, b):
+        worker_tids.append(threading.get_ident())
+        return _ok_action(source_message_id=ev["message_id"])
+
+    monkeypatch.setattr(bb, "consume_im", fake_consume)
+    monkeypatch.setattr(bb, "handle_event", fake_handle)
+
+    actions = list(bb.run_bot(_bot(), parallel=True))
+    # 全跑过
+    msgs = sorted(a.source_message_id for a in actions)
+    assert msgs == ["om_0", "om_1", "om_2"]
+    # handle_event 不在主线程
+    assert all(tid != main_tid for tid in worker_tids)
