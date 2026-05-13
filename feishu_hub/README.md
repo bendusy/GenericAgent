@@ -375,7 +375,32 @@ python -m feishu_hub indexer status
 - `--profile X` 是 lark-cli **global** flag，必须在子命令前（`lark-cli --profile X im ...`）
 - 一个 bot app 全局只能有**一个** event bus；同 app 跨机抢 bus 会冲突——双 bot 真机 e2e 要求两个 bot app 装在同一台机
 
-**未做**：双 bot 真机 e2e（受第二个 bot 当前在另一台机上的约束，需要协调或腾挪）。代码层全套 473 tests 绿，单 bot 本机 smoke 通过。
+**未做**：双 bot 双机真机 e2e（idempotency dedupe 服务端已验证，链路只剩跨机 e2e 没跑）。代码层全套 473 tests 绿，单机单 bot smoke 通过（2026-05-14：run 2 拿到 src=om_xxx → reply=om_yyy → relay_task=fa180257-...）。
+
+#### 多机部署模型（这套架构最关键的一条认知）
+
+**这套不是主从，是「角色分片 + 飞书做 message broker」。**
+
+```
+飞书 IM thread                ←  调度面（人 / 上游 bot 用 @mention 做路由）
+   │
+   ├─ @reviewer    →  机器 A 上的 reviewer bot daemon （消费 app_A 的 event bus）
+   ├─ @scribe      →  机器 B 上的 scribe   bot daemon （消费 app_B 的 event bus）
+   └─ @sandbox     →  机器 C 上的 sandbox  bot daemon （消费 app_C 的 event bus）
+```
+
+为什么这样可行：
+
+1. **路由原语是 IM @mention，不是 IP/SSH/hostname**。任何能 @ 这个 bot 的人或 bot 都能调度它，调度做在飞书侧。
+2. **leader election 由飞书物理约束代办**。"一个 bot app 全局只能有一个 event bus" → 每个 bot 在全网必然只有一台机响应，不需要任何选主代码。
+3. **加机器 = 声明式**。飞书开放平台新建 app → 那台机 `lark-cli profile add` → bots.yaml 加一条 → 启 daemon。零中心化协调。
+4. **跨机共享状态靠飞书 server 去重收敛，不是本地数据库**。`bot_relay_task` 的 chat → task 映射用 `idempotency_key='m3c-relay-task:<chat_id>'`；同一 chat 不同机器分别调 `task +create` 拿回**同一个 task guid**（飞书 server-side dedupe，已验证）。每机的 `~/.feishu_hub/state/m3c_chats/` 是只读优化层，cache 缺失或损坏都会自动回到飞书拿。
+5. **机器宕机/掉线 = 那个 bot 没响应**。飞书 thread 里"等待 reply"卡住，肉眼可见；本机 `python -m feishu_hub status` 能看 daemon 进程死活。不需要心跳服务。
+6. **机器之间不需要任何网络通道**。A 的 reviewer 干完 `@scribe` → B 的 scribe 接住，走的全是飞书 IM。本机防火墙再严都不影响。
+
+引申：**飞书 IM thread 就是这套分布式 agent 系统的 message broker，飞书 Task 就是它的工作流引擎**。不需要部署 Kafka / NATS / Temporal——飞书把这两件事都已经做了，而且自带 UI（thread 回放 + 我的待办时间线）。
+
+详细心智模型见 memory `feishu_m3c_multimachine.md`。
 
 ---
 
