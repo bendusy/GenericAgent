@@ -394,7 +394,7 @@ python -m feishu_hub indexer status
 1. **路由原语是 IM @mention，不是 IP/SSH/hostname**。任何能 @ 这个 bot 的人或 bot 都能调度它，调度做在飞书侧。
 2. **leader election 由飞书物理约束代办**。"一个 bot app 全局只能有一个 event bus" → 每个 bot 在全网必然只有一台机响应，不需要任何选主代码。
 3. **加机器 = 声明式**。飞书开放平台新建 app → 那台机 `lark-cli profile add` → bots.yaml 加一条 → 启 daemon。零中心化协调。
-4. **跨机共享状态靠飞书 server 去重收敛，不是本地数据库**。`bot_relay_task` 的 chat → task 映射用 `idempotency_key='m3c-relay-task:<chat_id>'`；同一 chat 不同机器分别调 `task +create` 拿回**同一个 task guid**（飞书 server-side dedupe，已验证）。每机的 `~/.feishu_hub/state/m3c_chats/` 是只读优化层，cache 缺失或损坏都会自动回到飞书拿。
+4. **跨机共享状态靠 server-side idempotency + 统一身份写手**。`bot_relay_task` 的 chat → task 映射用 `idempotency_key='m3c-relay-task:<chat_id>'`，但飞书 task `--idempotency-key` 是 **per-bot-app namespace**——两个不同 bot 用同 key 各拿各的 guid（实测）。解决方案：`BotRole.relay_writer_app_id` 字段，把所有机器的 relay_task 都绑到同一指定 bot 身份（lark-cli `--profile X`）下调用，靠 idempotency 在 TTL 窗口内（约 30 min）跨机收敛同 guid。部署前提：写手 bot 的 lark-cli profile 必须装在每一台 daemon 机上且 token 有效。每机的 `~/.feishu_hub/state/m3c_chats/` 是只读优化层。
 5. **机器宕机/掉线 = 那个 bot 没响应**。飞书 thread 里"等待 reply"卡住，肉眼可见；本机 `python -m feishu_hub status` 能看 daemon 进程死活。不需要心跳服务。
 6. **机器之间不需要任何网络通道**。A 的 reviewer 干完 `@scribe` → B 的 scribe 接住，走的全是飞书 IM。本机防火墙再严都不影响。
 
