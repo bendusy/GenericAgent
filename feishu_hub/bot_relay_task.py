@@ -86,7 +86,13 @@ def _format_start_step(bot: BotRole, event: Dict[str, Any], message_brief: str) 
 
 
 def _format_end_step(bot: BotRole, action: "BotAction", result_text: str) -> str:
-    """完成态 step：emoji + role + 状态描述 + 摘要前 200 字。"""
+    """完成态 step：emoji + role + 状态描述 + 摘要前 200 字。
+
+    优先级：aborted > timed_out > exit_code != 0 > 成功
+    """
+    if action.aborted:
+        reason = action.abort_reason or "(unknown)"
+        return f"⚠️ [{bot.role}] 用户请求中止 (via {reason})"
     if action.timed_out:
         return f"⚠️ [{bot.role}] 超时 (exit={action.runner_exit_code}, no completion signal)"
     if action.runner_exit_code != 0:

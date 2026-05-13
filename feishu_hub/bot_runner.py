@@ -37,6 +37,8 @@ class BotAction:
     reply_message_id: Optional[str]
     runner_exit_code: int
     timed_out: bool
+    aborted: bool = False
+    abort_reason: Optional[str] = None
 
 
 Runner = Callable[[RunSpec], RunResult]

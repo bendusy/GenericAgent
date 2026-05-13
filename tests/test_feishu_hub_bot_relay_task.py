@@ -291,3 +291,22 @@ def test_record_default_profile_none_when_no_writer_configured(isolated_state, m
     brt.record_start(bot=bot, event=_event(), message_brief="x")
     assert creates[0].get("profile") in (None, "")
     assert appends[0]["profile"] in (None, "")
+
+
+# ---------------------------------------------------------------------------
+# _format_end_step aborted 分支（R5 POC T6）
+# ---------------------------------------------------------------------------
+
+def test_format_end_step_aborted_takes_priority():
+    """aborted=True 时不管 exit_code / timed_out，都出'中止'文案。"""
+    bot = _bot()
+    action = _action(
+        runner_exit_code=-15,
+        timed_out=False,
+        aborted=True,
+        abort_reason="/stop",
+    )
+    step = brt._format_end_step(bot, action, "ignored output")
+    assert "⚠️" in step
+    assert "用户请求中止" in step
+    assert "/stop" in step
