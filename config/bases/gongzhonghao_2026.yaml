@@ -1,0 +1,13 @@
+role: 公众号-2026
+base_token: K6YPbiv33aABrLsm6KMcJRyVnfR
+table_id: tblZYTM9QUtq709x
+
+stage_to_bot:
+  "📋 选题": selector_bot
+  "✏️ 草稿": drafter_bot
+  "📝 修订": editor_bot
+  "✅ 发布": publisher_bot
+
+output_mirror:
+  drafter_bot: 关联文档
+  publisher_bot: 关联文档
