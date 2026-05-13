@@ -346,6 +346,37 @@ python -m feishu_hub indexer status
 - Stop hook 的 IM 文本通知形态变了——现在主路径是飞书 Task；只有 lark-cli 失败时才回退发 IM
 - 直接 import 或运行 `python -m feishu_hub.bitable_demo` 的脚本：**会断**。M3.D 反向 indexer 落地前先用 lark-cli `task +get-related-tasks` 查询
 
+### M3.C — bot@bot 协作（2026-05-14）
+
+多个 bot daemon 通过群里 `@mention` 互相接力。一个 bot daemon = 一个 lark-cli profile = 一个角色（reviewer / scribe / ...）。daemon 收到 `@me` 就调本机 runner，把结果 `--reply-in-thread` 回到原 thread；若配了 `next_bot_mention` 则末尾追加 `<下一个bot> 请接力。`，由下游 bot 的 daemon 接收事件继续。每次接力同步落一条 step 到飞书 Task（按 chat_id 维度复用），管理者从飞书"我的待办"能看完整接力链。
+
+**新模块**：
+
+| 模块 | 责任 |
+|---|---|
+| `feishu_hub/bot_role.py` | bots.yaml 加载 + 单 bot 事件匹配（chat_type=group + message_type=text + 内容以 `@<mention_alias>` 起头） |
+| `feishu_hub/event_bridge.py` | `lark-cli event consume im.message.receive_v1 --as bot --profile X` 子进程编排（ready marker / NDJSON / stdin keepalive / SIGTERM graceful exit） |
+| `feishu_hub/bot_runner.py` | event → 模板化 prompt → 调 runner → 模板化 reply → `im +messages-reply --reply-in-thread`（runner 失败 / 超时也回 IM，对人可见） |
+| `feishu_hub/bot_relay_task.py` | 每次接力同步飞书 Task 步骤；按 chat_id 复用同一 task（cache `~/.feishu_hub/state/m3c_chats/<chat_id>.json`） |
+| `feishu_hub/bot_bridge.py` | daemon orchestrator：consume_im → handle_event 循环；单条事件异常被吞，daemon 整体续跑 |
+
+**新 CLI**：
+
+- `python -m feishu_hub bot-bridge --role reviewer --timeout 5m` 启 daemon
+- `python -m feishu_hub status` 看板：identity / bots.yaml / 接力链 / daemon 进程
+
+**配置文件**：`~/.feishu_hub/bots.yaml`（模板：`feishu_hub/templates/bots.yaml.tmpl`）。每个 bot 一条 `{app_id, role, mention_alias, runner, default_cwd, prompt_template, reply_template?, chat_whitelist?, next_bot_mention?}`。
+
+**关键约束**（lark-cli 1.0.28 实测，违反会静默踩坑）：
+
+- `lark-cli event consume` 的 stdin **必须**给永不 EOF 的源——`/dev/null` 会让 lark-cli 立刻 `[event] stdin closed — shutting down`。本模块用 `tail -f /dev/null` 子进程的 stdout 做 keepalive
+- 退出 daemon 必须 SIGTERM 等 graceful exit，不能 SIGKILL（PreConsume 订阅会泄漏到下次启动）
+- `im +messages-reply` 的真实 flag 是 `--reply-in-thread`，不是 plan/POC memory 里早期写的 `--thread`
+- `--profile X` 是 lark-cli **global** flag，必须在子命令前（`lark-cli --profile X im ...`）
+- 一个 bot app 全局只能有**一个** event bus；同 app 跨机抢 bus 会冲突——双 bot 真机 e2e 要求两个 bot app 装在同一台机
+
+**未做**：双 bot 真机 e2e（受第二个 bot 当前在另一台机上的约束，需要协调或腾挪）。代码层全套 473 tests 绿，单 bot 本机 smoke 通过。
+
 ---
 
 ## 进一步阅读
