@@ -76,3 +76,75 @@ def append_steps(
         "--data", json.dumps(body, ensure_ascii=False),
     ]
     run_json(argv, timeout=30)
+
+
+# --- T3: session cache layer ---
+import datetime as _dt
+import os
+import re
+from pathlib import Path
+
+
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _feishu_hub_home() -> Path:
+    home = os.getenv("FEISHU_HUB_HOME")
+    return Path(home) if home else Path.home() / ".feishu_hub"
+
+
+def _session_cache_dir() -> Path:
+    d = _feishu_hub_home() / "state" / "session_tasks"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _safe_filename(agent: str, session: str) -> str:
+    """把 (agent, session) 拼成单一文件名；非白名单字符替换为 _，
+    并消除连续 ``..``（``.`` 在白名单内但 ``..`` 会形成路径跳出序列）。"""
+    raw = f"{agent}-{session}"
+    cleaned = _SAFE_NAME_RE.sub("_", raw)
+    while ".." in cleaned:
+        cleaned = cleaned.replace("..", "__")
+    return cleaned + ".json"
+
+
+def get_or_create_for_session(
+    agent: str,
+    session: str,
+    *,
+    cwd: str,
+    summary: str,
+    description: str = "",
+    follower_open_id: Optional[str] = None,
+) -> TaskRef:
+    """复用同 (agent, session) 已建的 task；首次调用 create + 写 state。"""
+    cache_file = _session_cache_dir() / _safe_filename(agent, session)
+    if cache_file.exists():
+        import json as _json
+        cached = _json.loads(cache_file.read_text(encoding="utf-8"))
+        return TaskRef(guid=cached["task_guid"], url=cached["task_url"])
+
+    ref = create_task(
+        agent=agent,
+        cwd=cwd,
+        summary=summary,
+        description=description,
+        follower_open_id=follower_open_id,
+        idempotency_key=f"{agent}-session-{session}",
+    )
+
+    import json as _json
+    cache_file.write_text(
+        _json.dumps(
+            {
+                "task_guid": ref.guid,
+                "task_url": ref.url,
+                "created_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                "summary": summary,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return ref

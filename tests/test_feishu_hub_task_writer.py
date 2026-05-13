@@ -94,3 +94,69 @@ def test_create_task_propagates_lark_cli_error(run_json):
     )
     with pytest.raises(LarkCLIError):
         create_task(agent="cc", cwd="/r", summary="s")
+
+
+# --- T3: session cache tests ---
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+from feishu_hub.task_writer import get_or_create_for_session
+
+
+def test_get_or_create_first_call_creates(tmp_path, monkeypatch):
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+
+    with patch("feishu_hub.task_writer.run_json") as run_json:
+        run_json.return_value = {"guid": "g1", "url": "u1"}
+        ref = get_or_create_for_session(
+            agent="cc", session="sess-A",
+            cwd="/r", summary="s", follower_open_id="ou_x",
+        )
+    assert ref.guid == "g1"
+    # state 文件应写入
+    cache_file = tmp_path / "state" / "session_tasks" / "cc-sess-A.json"
+    assert cache_file.exists()
+    import json
+    cached = json.loads(cache_file.read_text())
+    assert cached["task_guid"] == "g1"
+
+
+def test_get_or_create_second_call_reuses(tmp_path, monkeypatch):
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    # 预置 cache
+    cache_dir = tmp_path / "state" / "session_tasks"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "cc-sess-B.json").write_text(
+        '{"task_guid":"existing","task_url":"u","created_at":"x","summary":"s"}'
+    )
+
+    with patch("feishu_hub.task_writer.run_json") as run_json:
+        ref = get_or_create_for_session(
+            agent="cc", session="sess-B",
+            cwd="/r", summary="new summary",
+        )
+    # 不应调 lark-cli
+    run_json.assert_not_called()
+    assert ref.guid == "existing"
+
+
+def test_get_or_create_session_sanitizes_path(tmp_path, monkeypatch):
+    """agent / session 含特殊字符不应被注入文件路径。"""
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    with patch("feishu_hub.task_writer.run_json") as run_json:
+        run_json.return_value = {"guid": "g", "url": "u"}
+        get_or_create_for_session(
+            agent="cc",
+            session="../../etc/passwd",
+            cwd="/r", summary="s",
+        )
+    # 应有文件被写在 session_tasks/ 内，不应跳出 sandbox
+    cache_root = tmp_path / "state" / "session_tasks"
+    files = list(cache_root.glob("*.json"))
+    assert len(files) == 1
+    # 文件名必须不含 / 或 .. 序列
+    fname = files[0].name
+    assert "/" not in fname
+    assert ".." not in fname
