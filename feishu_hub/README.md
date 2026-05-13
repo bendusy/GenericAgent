@@ -223,7 +223,7 @@ tail -20 ~/.feishu_hub/journal/$(date +%Y-%m-%d).jsonl   # 看 stop_hook 那次�
 - 第 2 步在 **每台机器各建一个独立 app**（不要共享 appSecret），这样 `appId` 维度可区分两台机器
 - 第 4 步 `FEISHU_NOTIFY_TO` 都填**同一个 user open_id**（user 是同一人）
 - 第 5 步 init 各自独立——不要拷贝 `~/.feishu_hub/state/` 跨机器
-- 用户在飞书 app 看到的是：两个不同 bot 创建的 task，task 收件箱里都属于同一个 follower（用户自己）；可以从 task 详情的 "创建者" 字段区分来自哪台机器
+- **host 区分**：task_writer 自动在 task summary 末尾追加 `· {hostname}` 后缀，让飞书 task 列表一眼看出 `[cc] @repo · macbook` 还是 `[cc] @repo · axis`。默认取 `socket.gethostname()` 首段（去 `.local`），可以设 `export FEISHU_HUB_HOST=axis` 覆盖。
 - 跨机协同（一台 bot @mention 另一台 bot）属 M3.C 范围，本期暂不接
 
 ---

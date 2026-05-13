@@ -12,10 +12,24 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
 from feishu_hub.lark_cli import run_json
+
+
+def _default_host() -> str:
+    """优先用 ``FEISHU_HUB_HOST`` env，缺则用 hostname 首段（去 .local 等）。
+
+    多机部署时（同一飞书账号但不同机器），让 task summary 含 host
+    后缀让用户在飞书 task 列表能一眼分辨来源机器。
+    """
+    explicit = os.getenv("FEISHU_HUB_HOST")
+    if explicit:
+        return explicit
+    return socket.gethostname().split(".", 1)[0] or "unknown"
 
 
 @dataclass(frozen=True)
@@ -33,12 +47,22 @@ def create_task(
     description: str = "",
     follower_open_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
+    host: Optional[str] = None,
 ) -> TaskRef:
-    """bot 身份建任务。``follower_open_id`` 给 user open_id 让 user 在飞书 UI 可见。"""
+    """bot 身份建任务。``follower_open_id`` 给 user open_id 让 user 在飞书 UI 可见。
+
+    summary 自动后缀 ``· {host}``——多机部署时让飞书 task 列表区分来源。
+    ``host`` 显式传入优先；默认走 ``_default_host()``（env / hostname）。
+    若 summary 已含 ``· {host}`` 则不重复加。
+    """
+    effective_host = host or _default_host()
+    host_suffix = f"· {effective_host}"
+    final_summary = summary if host_suffix in summary else f"{summary} {host_suffix}"
+
     argv: List[str] = [
         "task", "+create",
         "--as", "bot",
-        "--summary", summary,
+        "--summary", final_summary,
     ]
     if description:
         argv += ["--description", description]

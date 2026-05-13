@@ -13,7 +13,8 @@ from feishu_hub.task_writer import (
 
 
 @patch("feishu_hub.task_writer.run_json")
-def test_create_task_calls_lark_cli_as_bot(run_json):
+def test_create_task_calls_lark_cli_as_bot(run_json, monkeypatch):
+    monkeypatch.setenv("FEISHU_HUB_HOST", "testhost")
     run_json.return_value = {
         "guid": "abc-123",
         "url": "https://applink.feishu.cn/client/todo/detail?guid=abc-123",
@@ -35,7 +36,8 @@ def test_create_task_calls_lark_cli_as_bot(run_json):
     assert "--as" in argv
     assert argv[argv.index("--as") + 1] == "bot"
     assert "--summary" in argv
-    assert argv[argv.index("--summary") + 1] == "[cc] @foo"
+    # M3.B host patch：summary 自动后缀 host
+    assert argv[argv.index("--summary") + 1] == "[cc] @foo · testhost"
     assert "--follower" in argv
     assert argv[argv.index("--follower") + 1] == "ou_xxx"
     assert "--idempotency-key" in argv
@@ -43,11 +45,58 @@ def test_create_task_calls_lark_cli_as_bot(run_json):
 
 
 @patch("feishu_hub.task_writer.run_json")
-def test_create_task_no_follower(run_json):
+def test_create_task_no_follower(run_json, monkeypatch):
+    monkeypatch.setenv("FEISHU_HUB_HOST", "testhost")
     run_json.return_value = {"guid": "g", "url": "u"}
     create_task(agent="cc", cwd="/r", summary="s")
     argv = run_json.call_args.args[0]
     assert "--follower" not in argv
+
+
+@patch("feishu_hub.task_writer.run_json")
+def test_create_task_uses_env_host(run_json, monkeypatch):
+    """FEISHU_HUB_HOST env 决定 summary 后缀。"""
+    monkeypatch.setenv("FEISHU_HUB_HOST", "axis")
+    run_json.return_value = {"guid": "g", "url": "u"}
+    create_task(agent="cc", cwd="/r", summary="[cc] @foo")
+    argv = run_json.call_args.args[0]
+    assert argv[argv.index("--summary") + 1] == "[cc] @foo · axis"
+
+
+@patch("feishu_hub.task_writer.run_json")
+def test_create_task_explicit_host_wins(run_json, monkeypatch):
+    """显式 host kwarg 覆盖 env。"""
+    monkeypatch.setenv("FEISHU_HUB_HOST", "env-host")
+    run_json.return_value = {"guid": "g", "url": "u"}
+    create_task(agent="cc", cwd="/r", summary="s", host="kwarg-host")
+    argv = run_json.call_args.args[0]
+    assert argv[argv.index("--summary") + 1] == "s · kwarg-host"
+
+
+@patch("feishu_hub.task_writer.run_json")
+def test_create_task_does_not_double_suffix(run_json, monkeypatch):
+    """summary 已含 · host 时不再追加。"""
+    monkeypatch.setenv("FEISHU_HUB_HOST", "axis")
+    run_json.return_value = {"guid": "g", "url": "u"}
+    create_task(agent="cc", cwd="/r", summary="[cc] @foo · axis")
+    argv = run_json.call_args.args[0]
+    # 后缀只出现一次
+    assert argv[argv.index("--summary") + 1].count("· axis") == 1
+
+
+@patch("feishu_hub.task_writer.run_json")
+def test_create_task_falls_back_to_hostname(run_json, monkeypatch):
+    """没有 FEISHU_HUB_HOST 时使用 socket.gethostname() 首段。"""
+    monkeypatch.delenv("FEISHU_HUB_HOST", raising=False)
+    run_json.return_value = {"guid": "g", "url": "u"}
+    create_task(agent="cc", cwd="/r", summary="s")
+    argv = run_json.call_args.args[0]
+    summary = argv[argv.index("--summary") + 1]
+    # 不能是 "· "（空 host）；不能含点（应该是 hostname 首段）
+    assert summary.startswith("s · ")
+    suffix = summary.split("· ", 1)[1]
+    assert suffix, "host 不应为空"
+    assert "." not in suffix, "hostname 应已去 .local 等后缀"
 
 
 @patch("feishu_hub.task_writer.run_json")
