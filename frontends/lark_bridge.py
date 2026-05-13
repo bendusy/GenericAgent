@@ -1,8 +1,19 @@
-"""Fork-only: bridge between GeneraticAgent and the Feishu lark-cli.
+"""Fork-only: bridge between GenericAgent and the Feishu lark-cli.
 
 Adds a `lark_cli` tool to GenericAgentHandler and exposes `run()` for slash
 commands. Stays out of any upstream-maintained file except via two narrow
 anchors documented in docs/FORK_ARCHITECTURE.md.
+
+> **DEPRECATED 但**仍**保留**（M3.B 状态）：
+> - 协同模型层面（feishu_hub/README.md "协同模型"）**不违反**红线——它只是 lark-cli
+>   的 subprocess 包装 + 大输出 overflow→docs upload，本机执行桥范畴；
+> - 但与 `feishu_hub/lark_cli.py` 有职责重叠（两个 lark-cli wrapper）。M3.E
+>   计划把 overflow→docs upload 能力合并到 `feishu_hub.lark_cli` 后，本模块
+>   缩成 30 行 re-export 薄壳，install() 钩子保留。
+>
+> 新代码不应 `import frontends.lark_bridge`。如需调 lark-cli，用
+> `feishu_hub.lark_cli.run_json`；如需 overflow 处理，先在 caller 端
+> truncate，或等 M3.E。
 """
 import json
 import os
