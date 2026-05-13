@@ -151,6 +151,44 @@ def test_im_send_text_without_idempotency_key(mock_run):
     assert "--idempotency-key" not in argv
 
 
+# ---- im_messages_reply (M3.C T4) -------------------------------------------
+
+@patch("feishu_hub.lark_cli.subprocess.run")
+def test_im_messages_reply_returns_message_id(mock_run):
+    mock_run.return_value = _completed(0,
+        json.dumps({"data": {"message_id": "om_reply"}}), "")
+    mid = lc.im_messages_reply(message_id="om_src", text="ack",
+                               reply_in_thread=True)
+    assert mid == "om_reply"
+    argv = mock_run.call_args[0][0]
+    assert argv[1:3] == ["im", "+messages-reply"]
+    assert "--message-id" in argv and argv[argv.index("--message-id") + 1] == "om_src"
+    assert "--text" in argv and argv[argv.index("--text") + 1] == "ack"
+    assert "--reply-in-thread" in argv
+
+
+@patch("feishu_hub.lark_cli.subprocess.run")
+def test_im_messages_reply_omits_thread_flag_when_false(mock_run):
+    mock_run.return_value = _completed(0, '{"data":{"message_id":"x"}}', "")
+    lc.im_messages_reply(message_id="om_src", text="ack", reply_in_thread=False)
+    argv = mock_run.call_args[0][0]
+    assert "--reply-in-thread" not in argv
+
+
+@patch("feishu_hub.lark_cli.subprocess.run")
+def test_im_messages_reply_routes_profile_global_flag(mock_run):
+    mock_run.return_value = _completed(0, '{"data":{"message_id":"x"}}', "")
+    lc.im_messages_reply(message_id="om_src", text="ack",
+                         reply_in_thread=True, profile="cli_other")
+    argv = mock_run.call_args[0][0]
+    # --profile 是 global flag，必须在子命令前
+    assert "--profile" in argv
+    pi = argv.index("--profile")
+    im_i = argv.index("im")
+    assert pi < im_i, f"--profile must precede 'im' subcommand, got {argv}"
+    assert argv[pi + 1] == "cli_other"
+
+
 # ---- docs_create_v2 / docs_update_overwrite ---------------------------------
 
 @patch("feishu_hub.lark_cli.subprocess.run")

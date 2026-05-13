@@ -167,6 +167,36 @@ def im_send_text(
     return _pluck(body, ("data", "message_id")) or _pluck(body, ("message_id",))
 
 
+def im_messages_reply(
+    *,
+    message_id: str,
+    text: str,
+    reply_in_thread: bool = True,
+    profile: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    binary: Optional[str] = None,
+) -> Optional[str]:
+    """``[--profile X] im +messages-reply --message-id <om_xxx> --text <...> [--reply-in-thread]``。
+
+    ``--profile`` 是 lark-cli **global** flag，必须出现在子命令 ``im`` 之前；
+    多 bot 场景下用它指定回复用哪个 lark-cli profile（= 哪个 bot）。
+    """
+    argv: List[str] = []
+    if profile:
+        argv += ["--profile", profile]
+    argv += ["im", "+messages-reply",
+             "--message-id", message_id,
+             "--text", text,
+             "--as", "bot"]
+    if reply_in_thread:
+        argv.append("--reply-in-thread")
+    if idempotency_key:
+        argv += ["--idempotency-key", idempotency_key]
+    body = run_json(argv, timeout=timeout, binary=binary)
+    return _pluck(body, ("data", "message_id")) or _pluck(body, ("message_id",))
+
+
 def docs_create_v2(
     *,
     parent_token: str,
