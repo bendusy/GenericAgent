@@ -40,7 +40,7 @@ def test_init_deploys_hook_script_executable(monkeypatch, tmp_path):
     mode = os.stat(hook).st_mode
     assert mode & stat.S_IXUSR, "hook script must be executable"
     content = hook.read_text(encoding="utf-8")
-    assert "lark-cli im +messages-send" in content
+    assert "python3 -m feishu_hub.stop_hook" in content
     assert "FEISHU_NOTIFY_TO" in content
 
 
