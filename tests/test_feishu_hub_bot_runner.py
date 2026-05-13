@@ -397,3 +397,111 @@ def test_handle_event_unregisters_on_success(monkeypatch, tmp_path):
     assert action.aborted is False
     # runner 运行完成后，registry 应该已清理 entry 文件
     assert registry.lookup("g_unreg_test") is None
+
+
+# ---------------------------------------------------------------------------
+# M3.G T5: handle_event adjust 重启循环
+# ---------------------------------------------------------------------------
+
+def test_handle_event_adjust_path_restarts_runner_once(tmp_path, monkeypatch):
+    """user /adjust → runner 第二次调用 with 拼接 prompt + adjust_attempts=1。"""
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+
+    from feishu_hub import bot_runner, runner_registry
+    from feishu_hub.bot_role import BotRole
+    from feishu_hub.dispatcher.runners import RunSpec, RunResult
+    from feishu_hub.task_writer import TaskRef
+
+    bot = BotRole(
+        app_id="cli_x", role="r", mention_alias="r",
+        runner="noop", prompt_template="{message}",
+        reply_template="{result}", default_cwd=".",
+    )
+    event = {"message_id": "om_x", "chat_id": "oc_x",
+             "message_type": "text", "content": "@r hi",
+             "sender_id": "ou_user", "chat_type": "group"}
+
+    fake_ref = TaskRef(guid="t1", url="u")
+    monkeypatch.setattr(bot_runner.bot_relay_task, "record_start",
+                        lambda **kw: fake_ref)
+    monkeypatch.setattr(bot_runner.bot_relay_task, "record_end",
+                        lambda **kw: None)
+    monkeypatch.setattr(bot_runner.bot_relay_task, "record_adjust",
+                        lambda **kw: None)
+    monkeypatch.setattr(bot_runner, "_default_replier",
+                        lambda **kw: "om_reply")
+
+    call_count = {"n": 0}
+    seen_prompts = []
+    reg = runner_registry.RunnerRegistry(root=tmp_path)
+    monkeypatch.setattr(runner_registry, "RunnerRegistry", lambda: reg)
+
+    def fake_runner(spec, *, on_pid=None):
+        call_count["n"] += 1
+        seen_prompts.append(spec.prompt)
+        if call_count["n"] == 1:
+            # 第一轮：写 adjust sentinel 模拟 hitl_router 命中
+            reg.write_adjust_sentinel("t1", "跑短点")
+            return RunResult(
+                runner="noop", exit_code=-15, stdout="", stderr="",
+                stdout_head="", stderr_head="", duration_ms=100, timed_out=False,
+            )
+        # 第二轮：正常完成
+        return RunResult(
+            runner="noop", exit_code=0, stdout="OK", stderr="",
+            stdout_head="OK", stderr_head="", duration_ms=200, timed_out=False,
+            final_text="OK",
+        )
+
+    action = bot_runner.handle_event(event, bot, runner=fake_runner)
+    assert call_count["n"] == 2
+    assert "[用户调整]: 跑短点" in seen_prompts[1]
+    assert action.adjust_attempts == 1
+    assert action.aborted is False
+
+
+def test_handle_event_adjust_then_adjust_exceeds_max(tmp_path, monkeypatch):
+    """两次 adjust 超 ADJUST_MAX=1：第二次降级为 abort。"""
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+
+    from feishu_hub import bot_runner, runner_registry
+    from feishu_hub.bot_role import BotRole
+    from feishu_hub.dispatcher.runners import RunSpec, RunResult
+    from feishu_hub.task_writer import TaskRef
+
+    bot = BotRole(
+        app_id="cli_x", role="r", mention_alias="r",
+        runner="noop", prompt_template="{message}",
+        reply_template="{result}", default_cwd=".",
+    )
+    event = {"message_id": "om_x", "chat_id": "oc_x",
+             "message_type": "text", "content": "@r hi",
+             "sender_id": "ou_user", "chat_type": "group"}
+
+    fake_ref = TaskRef(guid="t1", url="u")
+    monkeypatch.setattr(bot_runner.bot_relay_task, "record_start",
+                        lambda **kw: fake_ref)
+    monkeypatch.setattr(bot_runner.bot_relay_task, "record_end",
+                        lambda **kw: None)
+    monkeypatch.setattr(bot_runner.bot_relay_task, "record_adjust",
+                        lambda **kw: None)
+    monkeypatch.setattr(bot_runner, "_default_replier",
+                        lambda **kw: "om_reply")
+
+    reg = runner_registry.RunnerRegistry(root=tmp_path)
+    monkeypatch.setattr(runner_registry, "RunnerRegistry", lambda: reg)
+    counter = {"n": 0}
+
+    def fake_runner(spec, *, on_pid=None):
+        counter["n"] += 1
+        reg.write_adjust_sentinel("t1", f"调整{counter['n']}")
+        return RunResult(
+            runner="noop", exit_code=-15, stdout="", stderr="",
+            stdout_head="", stderr_head="", duration_ms=10, timed_out=False,
+        )
+
+    action = bot_runner.handle_event(event, bot, runner=fake_runner)
+    # ADJUST_MAX=1 → 第一次重启，第二次 adjust 超额，降级 abort
+    assert counter["n"] == 2  # 跑过两次（原 + 重启 1 次）
+    assert action.aborted is True
+    assert "超" in action.abort_reason  # "/adjust 超 1 次上限"

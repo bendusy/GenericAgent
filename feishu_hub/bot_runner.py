@@ -29,6 +29,8 @@ from .dispatcher.runners import RunResult, RunSpec, run as default_run
 
 _log = logging.getLogger(__name__)
 
+ADJUST_MAX = 1  # /adjust 自动重启次数上限（POC 限 1 次）
+
 
 @dataclass(frozen=True)
 class BotAction:
@@ -92,6 +94,9 @@ def _compose_reply(bot: br.BotRole, result: RunResult) -> str:
         template = bot.reply_template or "{result}"
         body = _format(template, result=body_text)
 
+    if result.adjust_attempts > 0 and not result.aborted:
+        body = f"（已按你的调整重跑 {result.adjust_attempts} 次）\n{body}"
+
     if bot.next_bot_mention and not result.aborted:
         body = f"{body}\n{bot.next_bot_mention} 请接力。"
     return body
@@ -104,10 +109,11 @@ def handle_event(
     runner: Optional[Runner] = None,
     replier: Optional[Replier] = None,
 ) -> Optional[BotAction]:
-    """处理一条事件；不匹配返回 ``None``，匹配返回 :class:`BotAction`。
+    """处理一条事件；不匹配返回 None，匹配返回 BotAction。
 
-    M3.E + R5: record_start → register PID → runner → 读 sentinel → record_end
-    → unregister → reply。registry / sentinel 异常都不阻塞主路径。
+    M3.E + R5 + M3.G: record_start → register → runner → 读 sentinel；
+    若 adjust 且未超 ADJUST_MAX：record_adjust + 拼新 prompt 重启 → 重复
+    最终 record_end → reply。
     """
     if not br.event_matches_bot(event, bot):
         return None
@@ -117,7 +123,6 @@ def handle_event(
 
     body = br.extract_message_body(event, bot)
 
-    # 1. record_start
     task_ref = None
     try:
         task_ref = bot_relay_task.record_start(
@@ -127,7 +132,6 @@ def handle_event(
         _log.exception("record_start failed: bot=%s msg=%s",
                        bot.app_id, event.get("message_id"))
 
-    # R5: registry + on_pid
     from . import runner_registry as rr
     from dataclasses import replace
     registry = rr.RunnerRegistry()
@@ -149,34 +153,64 @@ def handle_event(
             _log.exception("runner_registry.register failed: task=%s pid=%s",
                            task_ref.guid, pid)
 
-    # 2. runner
-    prompt = _format(
+    current_prompt = _format(
         bot.prompt_template,
         message=body,
         sender=event.get("sender_id", ""),
         chat_id=event.get("chat_id", ""),
     )
-    result = runner(RunSpec(
-        runner=bot.runner,
-        prompt=prompt,
-        cwd=bot.default_cwd,
-    ), on_pid=_on_pid)
 
-    # R5: 读 sentinel 填 aborted
-    if task_ref is not None:
+    attempts = 0
+    result: RunResult
+    while True:
+        result = runner(RunSpec(
+            runner=bot.runner,
+            prompt=current_prompt,
+            cwd=bot.default_cwd,
+        ), on_pid=_on_pid)
+
         abort_reason: Optional[str] = None
-        try:
-            abort_reason = registry.read_abort_sentinel(task_ref.guid)
-        except Exception:
-            _log.exception("read_abort_sentinel failed: task=%s", task_ref.guid)
-        if abort_reason is not None:
-            result = replace(result, aborted=True, abort_reason=abort_reason)
-        try:
-            registry.unregister(task_ref.guid)
-        except Exception:
-            _log.exception("registry.unregister failed: task=%s", task_ref.guid)
+        adjust_text: Optional[str] = None
+        if task_ref is not None:
+            try:
+                abort_reason = registry.read_abort_sentinel(task_ref.guid)
+                adjust_text = registry.read_adjust_sentinel(task_ref.guid)
+            except Exception:
+                _log.exception("read sentinel failed: task=%s", task_ref.guid)
+            try:
+                registry.unregister(task_ref.guid)
+            except Exception:
+                _log.exception("registry.unregister failed: task=%s", task_ref.guid)
 
-    # 3. record_end
+        # adjust 路径（未超额）→ 重启
+        if adjust_text is not None and attempts < ADJUST_MAX and task_ref is not None:
+            try:
+                bot_relay_task.record_adjust(
+                    bot=bot, task_ref=task_ref,
+                    adjust_text=adjust_text, attempt=attempts + 1,
+                )
+            except Exception:
+                _log.exception("record_adjust failed: task=%s", task_ref.guid)
+            current_prompt = f"{current_prompt}\n\n[用户调整]: {adjust_text}"
+            attempts += 1
+            continue
+
+        # 终止：normal / abort / adjust 超额
+        if adjust_text is not None and attempts >= ADJUST_MAX:
+            result = replace(
+                result, aborted=True,
+                abort_reason=f"/adjust 超 {ADJUST_MAX} 次上限: {adjust_text}",
+                adjust_attempts=attempts,
+            )
+        elif abort_reason is not None:
+            result = replace(
+                result, aborted=True, abort_reason=abort_reason,
+                adjust_attempts=attempts,
+            )
+        else:
+            result = replace(result, adjust_attempts=attempts)
+        break
+
     action_seed = BotAction(
         bot_app_id=bot.app_id,
         chat_id=event.get("chat_id", ""),
@@ -186,6 +220,7 @@ def handle_event(
         timed_out=result.timed_out,
         aborted=result.aborted,
         abort_reason=result.abort_reason,
+        adjust_attempts=result.adjust_attempts,
     )
     result_text_for_step = result.final_text or result.stdout_head or ""
     try:
@@ -196,7 +231,6 @@ def handle_event(
         _log.exception("record_end failed: bot=%s msg=%s",
                        bot.app_id, event.get("message_id"))
 
-    # 4. reply
     reply_text = _compose_reply(bot, result)
     if task_ref is not None:
         reply_text = f"{reply_text}{_TASK_URL_SUFFIX.format(url=task_ref.url)}"
@@ -215,4 +249,5 @@ def handle_event(
         timed_out=result.timed_out,
         aborted=result.aborted,
         abort_reason=result.abort_reason,
+        adjust_attempts=result.adjust_attempts,
     )
