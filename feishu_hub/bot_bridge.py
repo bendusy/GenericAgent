@@ -8,9 +8,13 @@ from __future__ import annotations
 import logging
 from typing import Iterator
 
-from .bot_role import BotRole
+from . import bot_relay_task
+from .bot_role import BotRole, extract_message_body
 from .bot_runner import BotAction, handle_event
 from .event_bridge import consume_im
+
+
+_MESSAGE_BRIEF_LEN = 40
 
 
 _log = logging.getLogger(__name__)
@@ -36,5 +40,12 @@ def run_bot(
             _log.exception("handle_event failed: bot=%s msg=%s",
                            bot.app_id, event.get("message_id"))
             continue
-        if action is not None:
-            yield action
+        if action is None:
+            continue
+        try:
+            brief = extract_message_body(event, bot)[:_MESSAGE_BRIEF_LEN]
+            bot_relay_task.record(bot=bot, action=action, message_brief=brief)
+        except Exception:
+            _log.exception("bot_relay_task.record failed: bot=%s msg=%s",
+                           bot.app_id, event.get("message_id"))
+        yield action
