@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from . import bot_relay_task
@@ -41,7 +42,7 @@ class BotAction:
     abort_reason: Optional[str] = None
 
 
-Runner = Callable[[RunSpec], RunResult]
+Runner = Callable[..., RunResult]  # (RunSpec, *, on_pid=None) → RunResult
 Replier = Callable[..., Optional[str]]  # kw: message_id, text, thread, profile
 
 # Reply 末尾追加 task URL 的模板（M3.E）
@@ -51,8 +52,8 @@ _TASK_URL_SUFFIX = "\n\n📋 查看完整进度：{url}"
 _MESSAGE_BRIEF_MAX = 80
 
 
-def _default_runner(spec: RunSpec) -> RunResult:
-    return default_run(spec)
+def _default_runner(spec: RunSpec, *, on_pid=None) -> RunResult:
+    return default_run(spec, on_pid=on_pid)
 
 
 def _default_replier(
@@ -78,7 +79,9 @@ def _format(template: str, **kw: Any) -> str:
 
 def _compose_reply(bot: br.BotRole, result: RunResult) -> str:
     """按 ``bot.reply_template`` 渲染主体，再按需追加 ``next_bot_mention``。"""
-    if result.timed_out:
+    if result.aborted:
+        body = f"⚠️ 已应你的请求中止 (via {result.abort_reason or 'unknown'})"
+    elif result.timed_out:
         body = f"⚠️ runner 超时（{result.duration_ms} ms），未完成。"
     elif result.exit_code != 0:
         err = result.stderr_head or "(no stderr)"
@@ -88,7 +91,7 @@ def _compose_reply(bot: br.BotRole, result: RunResult) -> str:
         template = bot.reply_template or "{result}"
         body = _format(template, result=body_text)
 
-    if bot.next_bot_mention:
+    if bot.next_bot_mention and not result.aborted:
         body = f"{body}\n{bot.next_bot_mention} 请接力。"
     return body
 
@@ -102,8 +105,8 @@ def handle_event(
 ) -> Optional[BotAction]:
     """处理一条事件；不匹配返回 ``None``，匹配返回 :class:`BotAction`。
 
-    M3.E 调用顺序：record_start → runner → record_end → reply（含 task URL）。
-    relay_task 任一步异常都不阻塞主路径（log 后继续）。
+    M3.E + R5: record_start → register PID → runner → 读 sentinel → record_end
+    → unregister → reply。registry / sentinel 异常都不阻塞主路径。
     """
     if not br.event_matches_bot(event, bot):
         return None
@@ -113,7 +116,7 @@ def handle_event(
 
     body = br.extract_message_body(event, bot)
 
-    # 1. record_start: 建 task + 起始 step（runner 跑前，user 飞书 task 详情页即可见 "已收到"）
+    # 1. record_start
     task_ref = None
     try:
         task_ref = bot_relay_task.record_start(
@@ -122,6 +125,28 @@ def handle_event(
     except Exception:
         _log.exception("record_start failed: bot=%s msg=%s",
                        bot.app_id, event.get("message_id"))
+
+    # R5: registry + on_pid
+    from . import runner_registry as rr
+    from dataclasses import replace
+    registry = rr.RunnerRegistry()
+
+    def _on_pid(pid: int) -> None:
+        if task_ref is None:
+            return
+        try:
+            registry.register(rr.RunnerEntry(
+                task_guid=task_ref.guid,
+                task_url=task_ref.url,
+                runner_pid=pid,
+                bot_app_id=bot.app_id,
+                chat_id=event.get("chat_id", ""),
+                source_message_id=event.get("message_id", ""),
+                started_at=datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+            ))
+        except Exception:
+            _log.exception("runner_registry.register failed: task=%s pid=%s",
+                           task_ref.guid, pid)
 
     # 2. runner
     prompt = _format(
@@ -134,9 +159,23 @@ def handle_event(
         runner=bot.runner,
         prompt=prompt,
         cwd=bot.default_cwd,
-    ))
+    ), on_pid=_on_pid)
 
-    # 3. record_end: append 完成 / 超时 / 失败 step
+    # R5: 读 sentinel 填 aborted
+    if task_ref is not None:
+        abort_reason: Optional[str] = None
+        try:
+            abort_reason = registry.read_abort_sentinel(task_ref.guid)
+        except Exception:
+            _log.exception("read_abort_sentinel failed: task=%s", task_ref.guid)
+        if abort_reason is not None:
+            result = replace(result, aborted=True, abort_reason=abort_reason)
+        try:
+            registry.unregister(task_ref.guid)
+        except Exception:
+            _log.exception("registry.unregister failed: task=%s", task_ref.guid)
+
+    # 3. record_end
     action_seed = BotAction(
         bot_app_id=bot.app_id,
         chat_id=event.get("chat_id", ""),
@@ -144,6 +183,8 @@ def handle_event(
         reply_message_id=None,
         runner_exit_code=result.exit_code,
         timed_out=result.timed_out,
+        aborted=result.aborted,
+        abort_reason=result.abort_reason,
     )
     result_text_for_step = result.final_text or result.stdout_head or ""
     try:
@@ -154,7 +195,7 @@ def handle_event(
         _log.exception("record_end failed: bot=%s msg=%s",
                        bot.app_id, event.get("message_id"))
 
-    # 4. reply: 主体（含 next_bot_mention）+ 可选 task URL 后缀
+    # 4. reply
     reply_text = _compose_reply(bot, result)
     if task_ref is not None:
         reply_text = f"{reply_text}{_TASK_URL_SUFFIX.format(url=task_ref.url)}"
@@ -171,4 +212,6 @@ def handle_event(
         reply_message_id=reply_id,
         runner_exit_code=result.exit_code,
         timed_out=result.timed_out,
+        aborted=result.aborted,
+        abort_reason=result.abort_reason,
     )

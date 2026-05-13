@@ -67,7 +67,7 @@ def _ok_result(text: str = "✅ 通过") -> RunResult:
 def test_handle_event_returns_none_when_event_does_not_match():
     bot = _bot()
     ev = _ev(content="hi @沉淀Bot something")  # @不是这个 bot
-    result = r.handle_event(ev, bot, runner=lambda s: _ok_result(), replier=None)
+    result = r.handle_event(ev, bot, runner=lambda s, **kw: _ok_result(), replier=None)
     assert result is None
 
 
@@ -76,7 +76,7 @@ def test_handle_event_formats_prompt_with_stripped_body():
     ev = _ev(content="@审核Bot  please review this")
     captured: dict = {}
 
-    def fake_runner(spec: RunSpec) -> RunResult:
+    def fake_runner(spec: RunSpec, **kw) -> RunResult:
         captured["prompt"] = spec.prompt
         captured["cwd"] = spec.cwd
         captured["runner"] = spec.runner
@@ -102,7 +102,7 @@ def test_handle_event_replies_in_thread_with_runner_result():
 
     action = r.handle_event(
         ev, bot,
-        runner=lambda s: _ok_result("✅ 通过"),
+        runner=lambda s, **kw: _ok_result("✅ 通过"),
         replier=fake_replier,
     )
     assert captured["message_id"] == "om_xxx"
@@ -127,7 +127,7 @@ def test_handle_event_appends_next_bot_mention_to_reply():
 
     r.handle_event(
         ev, bot,
-        runner=lambda s: _ok_result("✅ 通过"),
+        runner=lambda s, **kw: _ok_result("✅ 通过"),
         replier=fake_replier,
     )
     # next_bot_mention 应被追加到 reply text 末尾（独立一行）
@@ -151,7 +151,7 @@ def test_handle_event_reports_runner_failure_in_reply():
         return "om_reply_err"
 
     action = r.handle_event(
-        ev, bot, runner=lambda s: bad, replier=fake_replier,
+        ev, bot, runner=lambda s, **kw: bad, replier=fake_replier,
     )
     assert action.runner_exit_code == 1
     assert "runner failed" in captured["text"] or "boom" in captured["text"]
@@ -174,7 +174,7 @@ def test_handle_event_skips_when_runner_timed_out():
         return "om_reply_timeout"
 
     action = r.handle_event(
-        ev, bot, runner=lambda s: timed, replier=fake_replier,
+        ev, bot, runner=lambda s, **kw: timed, replier=fake_replier,
     )
     assert action.timed_out is True
     assert "timeout" in captured["text"].lower() or "超时" in captured["text"]
@@ -195,7 +195,7 @@ def test_handle_event_calls_record_start_before_runner_and_end_after(monkeypatch
         return TaskRef(guid="g_test",
                        url="https://applink.feishu.cn/client/todo/detail?guid=g_test")
 
-    def fake_runner(spec):
+    def fake_runner(spec, **kw):
         order.append("runner")
         return _ok_result("done")
 
@@ -232,7 +232,7 @@ def test_handle_event_reply_text_contains_task_url(monkeypatch):
         return "om_reply"
 
     r.handle_event(ev, bot,
-                   runner=lambda s: _ok_result("✅ 通过"),
+                   runner=lambda s, **kw: _ok_result("✅ 通过"),
                    replier=fake_replier)
     text = captured["text"]
     assert "https://applink.feishu.cn/client/todo/detail?guid=g_test" in text
@@ -253,7 +253,7 @@ def test_handle_event_reply_without_task_url_when_record_start_returns_none(monk
         return "om_reply"
 
     r.handle_event(ev, bot,
-                   runner=lambda s: _ok_result("ok"),
+                   runner=lambda s, **kw: _ok_result("ok"),
                    replier=fake_replier)
     text = captured["text"]
     assert "applink.feishu.cn" not in text
@@ -277,7 +277,7 @@ def test_handle_event_continues_when_record_start_raises(monkeypatch):
         return "om_reply"
 
     action = r.handle_event(ev, bot,
-                            runner=lambda s: _ok_result("survived"),
+                            runner=lambda s, **kw: _ok_result("survived"),
                             replier=fake_replier)
     # runner 跑了、reply 发了
     assert action is not None
@@ -305,8 +305,95 @@ def test_handle_event_continues_when_record_end_raises(monkeypatch):
         return "om_reply"
 
     action = r.handle_event(ev, bot,
-                            runner=lambda s: _ok_result("survived"),
+                            runner=lambda s, **kw: _ok_result("survived"),
                             replier=fake_replier)
     assert action is not None
     # URL 还是附了（record_start 成功）
     assert "applink.feishu.cn" in captured["text"]
+
+
+# ---------------------------------------------------------------------------
+# R5 HITL POC T7: runner_registry + abort sentinel
+# ---------------------------------------------------------------------------
+
+def test_handle_event_reads_abort_sentinel_into_result(monkeypatch, tmp_path):
+    """R5 T7: runner 完成后读 sentinel → result.aborted=True，reply 含中止文案。"""
+    from feishu_hub import runner_registry as rr
+
+    bot = br.BotRole(
+        app_id="cli_x", role="r", mention_alias="r",
+        runner="noop", prompt_template="{message}",
+        reply_template="{result}", default_cwd=".",
+    )
+    event = {"message_id": "om_x", "chat_id": "oc_x",
+             "message_type": "text", "content": "@r hi",
+             "sender_id": "ou_user", "chat_type": "group"}
+
+    task_ref = TaskRef(guid="g_abort_test", url="https://applink.feishu.cn/t/g_abort_test")
+
+    monkeypatch.setattr(r.bot_relay_task, "record_start", lambda **kw: task_ref)
+    monkeypatch.setattr(r.bot_relay_task, "record_end", lambda **kw: None)
+
+    # 用 tmp_path 做 state 目录，预写 sentinel
+    registry = rr.RunnerRegistry(root=tmp_path)
+    registry.write_abort_sentinel("g_abort_test", "/stop by user")
+
+    # patch RunnerRegistry 构造函数，让 handle_event 拿到我们的 registry
+    monkeypatch.setattr(rr, "RunnerRegistry", lambda: registry)
+
+    captured: dict = {}
+
+    def fake_replier(**kw):
+        captured.update(kw)
+        return "om_reply"
+
+    action = r.handle_event(event, bot,
+                            runner=lambda s, **kw: _ok_result("ok"),
+                            replier=fake_replier)
+
+    assert action is not None
+    assert action.aborted is True
+    assert action.abort_reason == "/stop by user"
+    assert "中止" in captured["text"] or "aborted" in captured["text"].lower()
+
+
+def test_handle_event_unregisters_on_success(monkeypatch, tmp_path):
+    """R5 T7: runner 成功结束 → registry 里无残留 entry 文件。"""
+    from feishu_hub import runner_registry as rr
+
+    bot = br.BotRole(
+        app_id="cli_x", role="r", mention_alias="r",
+        runner="noop", prompt_template="{message}",
+        reply_template="{result}", default_cwd=".",
+    )
+    event = {"message_id": "om_y", "chat_id": "oc_y",
+             "message_type": "text", "content": "@r hello",
+             "sender_id": "ou_user2", "chat_type": "group"}
+
+    task_ref = TaskRef(guid="g_unreg_test", url="https://applink.feishu.cn/t/g_unreg_test")
+
+    monkeypatch.setattr(r.bot_relay_task, "record_start", lambda **kw: task_ref)
+    monkeypatch.setattr(r.bot_relay_task, "record_end", lambda **kw: None)
+
+    registry = rr.RunnerRegistry(root=tmp_path)
+    monkeypatch.setattr(rr, "RunnerRegistry", lambda: registry)
+
+    pids_registered: list = []
+
+    def fake_runner(spec, **kw):
+        # on_pid 会由 handle_event 传进来，这里模拟 pid 注册
+        on_pid = kw.get("on_pid")
+        if on_pid:
+            on_pid(12345)
+            pids_registered.append(12345)
+        return _ok_result("done")
+
+    def fake_replier(**kw):
+        return "om_reply"
+
+    action = r.handle_event(event, bot, runner=fake_runner, replier=fake_replier)
+
+    assert action is not None
+    assert action.aborted is False
+    # runner 运行完成后，registry 应该已清理 entry 文件
+    assert registry.lookup("g_unreg_test") is None
