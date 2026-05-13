@@ -64,3 +64,55 @@ def test_resolve_bot_returns_none_when_record_has_neither():
     cfg = _configs()[0]
     rec = {"负责 AI": [], "阶段": []}
     assert bir._resolve_bot(rec, cfg) is None
+
+
+# ---- Cycle 4.3: try_handle happy path + no-op ----
+
+def _make_event(text: str, chat_id: str = "oc_x", msg_id: str = "om_x") -> dict:
+    return {"event": {"message": {
+        "content": json.dumps({"text": text}),
+        "chat_id": chat_id, "message_id": msg_id,
+    }}}
+
+
+def test_try_handle_returns_false_when_no_run_command(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    from feishu_hub.runner_registry import RunnerRegistry
+    registry = RunnerRegistry()
+    replies = []
+    event = _make_event("hi there")
+    assert bir.try_handle(event, configs=_configs(), registry=registry,
+                          reply_fn=replies.append) is False
+    assert replies == []
+
+
+def test_try_handle_consumes_run_command_happy_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    from feishu_hub.runner_registry import RunnerRegistry
+
+    monkeypatch.setattr(bir, "base_record_get",
+                        lambda **kw: {"运行状态": ["idle"], "阶段": ["📋 选题"], "负责 AI": []})
+    monkeypatch.setattr(bir, "cas_acquire_running",
+                        lambda **kw: ("marker-abc", "ok"))
+    monkeypatch.setattr(bir, "append_product", lambda **kw: None)
+
+    dispatch_calls = []
+
+    def fake_dispatch(bot_name, prompt, on_pid):
+        dispatch_calls.append((bot_name, prompt))
+        on_pid(12345)
+        return 12345
+    monkeypatch.setattr(bir, "_dispatch_runner", fake_dispatch)
+    monkeypatch.setattr("feishu_hub.runner_registry._pid_alive", lambda pid: True)
+
+    registry = RunnerRegistry()
+    replies = []
+    event = _make_event("@bot /run 公众号-2026 record:recABC")
+    assert bir.try_handle(event, configs=_configs(), registry=registry,
+                          reply_fn=replies.append) is True
+    assert dispatch_calls and dispatch_calls[0][0] == "selector_bot"
+    assert "recABC" in dispatch_calls[0][1]
+    entry = registry.lookup_by_record_id("recABC")
+    assert entry is not None
+    assert entry.runner_pid == 12345
+    assert entry.base_token == "K6abc"
