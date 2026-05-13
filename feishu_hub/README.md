@@ -246,6 +246,46 @@ python -m feishu_hub whoami   # 跟随更新
 
 **多机协同**（一台 bot @mention 另一台 bot）属 M3.C 范围；本期已通过 host suffix 让飞书 task UI 区分来源。
 
+### M3.D — Base 反向 indexer（2026-05-13）
+
+**它解决了什么问题**：飞书 Task UI 适合"一项一项处理"（user 在收件箱点开任务看时间线），但**不适合跨工作项查询**（按 agent 统计耗时？按 host 分桶看哪台机器跑得多？按 cwd 看每个项目消耗？）。Task 是事实源，Base 是索引层——M3.D 把 Task 列表定期刷到 Base，看板/网格/甘特视图按任意维度切片。
+
+**协同模型再确认**（M3.A 红线）：
+- Task → Base **单向**派生；用户在 Base 改了什么**不**回写 Task
+- 只索引 ``creator.type == "app"`` 的 task（agent 建的）；user 手建的工作 task 不进 Base 避免污染
+
+**用法**：
+
+```bash
+# 1. 首次：建 M3.D 所需字段（task_guid / host / creator_app_id / assignee / task_url / last_synced）
+python -m feishu_hub indexer migrate-schema
+
+# 2. 增量刷（默认；用 cursor.json 推进）
+python -m feishu_hub indexer run
+
+# 3. 全量校准（不依赖 cursor；周日跑一次防漂移）
+python -m feishu_hub indexer run --full
+
+# 4. 看上次跑的结果 + 当前 cursor
+python -m feishu_hub indexer status
+```
+
+**自动化**：M3.E 会加 launchd plist 30min 一次 cron；当前手工触发或集成到现有 cron。
+
+**飞书 Base 看板视图配置**（用户在飞书 UI 手建一次即可）：
+
+| 视图名 | 类型 | 分组键 | 过滤 |
+|---|---|---|---|
+| 今日活跃 | 网格 | — | ``last_synced >= TODAY()`` |
+| 按 Agent 分组 | 看板 | Agent | — |
+| 按机器分组 | 看板 | host | — |
+| 任务时间线 | 甘特 | — | 开始字段=创建时间, 结束=完成时间 |
+| 失败/超时 | 网格 | — | ``状态 ∈ {失败, 超时}`` |
+
+**对下游的影响**：
+- 之前直接读 Base ``agent_tasks`` 表的脚本：M3.B 之前数据是 dispatcher 直接写的；M3.D 之后**只有 agent 创建的 task 才进 Base**。M2 时期的旧行不会被 indexer 覆盖（旧行 task_guid 字段为空）。
+- 想看真正实时的 agent 状态：飞书 Task UI > Base（Base 有 30min 延迟）；Base 强项是统计 / 跨工作项视图。
+
 ---
 
 ## 变更历史
