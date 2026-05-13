@@ -158,3 +158,32 @@ def test_lookup_old_json_without_record_id_field(registry, tmp_path):
     assert got.record_id is None
     assert got.base_token is None
     assert got.table_id is None
+
+
+def test_lookup_by_record_id_finds_alive_entry(registry, monkeypatch):
+    import dataclasses
+    e = dataclasses.replace(_entry(guid="t1", pid=os.getpid()), record_id="recAlive")
+    registry.register(e)
+    monkeypatch.setattr("feishu_hub.runner_registry._pid_alive", lambda pid: True)
+    got = registry.lookup_by_record_id("recAlive")
+    assert got is not None and got.task_guid == "t1"
+
+
+def test_lookup_by_record_id_skips_dead_pid(registry, monkeypatch):
+    import dataclasses
+    e = dataclasses.replace(_entry(guid="t1", pid=999999), record_id="recDead")
+    registry.register(e)
+    monkeypatch.setattr("feishu_hub.runner_registry._pid_alive", lambda pid: False)
+    assert registry.lookup_by_record_id("recDead") is None
+
+
+def test_lookup_by_record_id_missing_returns_none(registry, monkeypatch):
+    monkeypatch.setattr("feishu_hub.runner_registry._pid_alive", lambda pid: True)
+    assert registry.lookup_by_record_id("recNope") is None
+
+
+def test_lookup_by_record_id_ignores_entries_without_record_id_field(registry, monkeypatch):
+    # 旧风格 entry（无 record_id）
+    registry.register(_entry(guid="t1"))
+    monkeypatch.setattr("feishu_hub.runner_registry._pid_alive", lambda pid: True)
+    assert registry.lookup_by_record_id("recAny") is None

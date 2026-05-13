@@ -141,6 +141,23 @@ class RunnerRegistry:
             return None
         return max(candidates, key=lambda e: e.started_at)
 
+    def lookup_by_record_id(self, record_id: str) -> Optional[RunnerEntry]:
+        """扫 state_dir 找 record_id 匹配的活 entry（M4.C：Base 记录 → runner）。"""
+        for p in self._root.glob("*.json"):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if data.get("record_id") != record_id:
+                continue
+            try:
+                entry = RunnerEntry(**data)
+            except TypeError:
+                continue
+            if _pid_alive(entry.runner_pid):
+                return entry
+        return None
+
     def cleanup_orphans(self) -> int:
         cleaned = 0
         for p in self._root.glob("*.json"):
