@@ -40,7 +40,8 @@ feishu_hub/
 ├── git_log.py          # 多仓库 git log 聚合（日报数据源）
 ├── llm_summary.py      # 日报摘要（调 GA llmcore；唯一允许 import ga 的文件）
 ├── daily_report.py     # 本机复盘日报（与飞书 lark-workflow-standup-report 互补，不冲突）
-├── bitable_demo.py     # 一键建 agent_tasks 表的参考脚本（M3.A 后表降级为索引层）
+├── task_writer.py      # bot 创建 task + 追加执行步骤 + session 缓存（M3.B 主路径）
+├── stop_hook.py        # shell→python 桥，task_writer 主路径 + IM 兜底（shell 调不了复杂 JSON）
 ├── templates/          # CC/Codex 配置片段 + Stop hook 脚本
 └── dispatcher/         # 本机执行桥（M3.A 后 thin bridge）
     ├── cli.py          # fire（hook 单次）+ replay（调试）+ test-rule
@@ -118,6 +119,31 @@ python -m feishu_hub smoke
 
 - 用过 `python -m feishu_hub.dispatcher tail` 的 launchd plist / cron / shell 脚本：**会断**。改用 `python -m feishu_hub.dispatcher fire` 单次直触（接 CC/Codex Stop hook 调用），或 `replay` 重放本机 journal 调试。
 - 直接 import `feishu_hub.dispatcher.bitable_writer` 的代码：**会断**。M3.B 完成后通过 `lark-cli task +create` 路径替代。
+
+### M3.B — Task 域主路径接入（2026-05-13）
+
+把 CC/Codex Stop hook 的飞书侧从"发 IM 纯文本"升级到"创建飞书 Task + 追加执行步骤"。agent 工作流首次在飞书 UI 以工作项形式可见、可跟进。
+
+**它解决了什么问题**：
+
+| 之前 | M3.B 后 |
+|---|---|
+| Stop hook 只发 IM text，用户在飞书看到一行通知，但**点不动**，看不到 agent 做了哪几步 | bot 创建/复用 task（user 作 follower），bot 追加执行步骤；user 在飞书 Task UI 直接点开看时间线 |
+| 同一 session 多次触发 hook 各发独立 IM，刷屏 | 同 `(agent, session)` 复用 task，追加 step；本地缓存 `~/.feishu_hub/state/session_tasks/<agent>-<session>.json` |
+| `bitable_demo.py` 建 agent_tasks 表，把 Base 当 agent 执行流的事实源 | 删除；Base 留 M3.D 作为索引层从 task 列表反向刷出 |
+
+**关键约束**（lark-cli 1.0.28 POC 已踩坑、代码已固化）：
+- `task agent_task_step_info append_task_steps` 必须 `--as bot`
+- bot 必须是 task 创建者（user 创建的 task → bot 写 step 会 10403）
+- `timestamp` 字段在 1.0.28 序列化 bug，必须省略
+
+**新模块**：`feishu_hub/task_writer.py`（bot 创建任务 + 追加步骤 + session 缓存 3 个 API）+ `feishu_hub/stop_hook.py`（shell→python 桥，避免 shell 拼复杂 JSON）。
+
+**降级路径**：lark-cli 调用失败时自动 fallback 到 IM text，保证 agent 不会因 Task 路径故障静默丢失通知。
+
+**对下游的影响**：
+- Stop hook 的 IM 文本通知形态变了——现在主路径是飞书 Task；只有 lark-cli 失败时才回退发 IM
+- 直接 import 或运行 `python -m feishu_hub.bitable_demo` 的脚本：**会断**。M3.D 反向 indexer 落地前先用 lark-cli `task +get-related-tasks` 查询
 
 ---
 
