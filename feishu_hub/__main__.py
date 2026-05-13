@@ -261,6 +261,93 @@ def cmd_whoami(args: argparse.Namespace) -> int:
     return 0 if ident.is_ready else 1
 
 
+def _status_identity():
+    """testable hook：identity 解析；测试可 monkeypatch 返回 None / 假身份。"""
+    from . import identity as ident_mod
+    return ident_mod.current_identity()
+
+
+def _status_daemon_pids() -> List[int]:
+    """探测本机是否有 'feishu_hub bot-bridge' daemon 进程在跑。失败返回 []。"""
+    try:
+        r = subprocess.run(
+            ["pgrep", "-f", "feishu_hub bot-bridge"],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if r.returncode != 0:
+        return []
+    out: List[int] = []
+    for line in r.stdout.splitlines():
+        try:
+            out.append(int(line.strip()))
+        except ValueError:
+            continue
+    # 排除自己（status 命令本身的 pid 不算 daemon）
+    me = os.getpid()
+    return [p for p in out if p != me]
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """看板：identity / bots.yaml / m3c 接力链 / daemon 进程。"""
+    from . import bot_role, config
+
+    # 1. Identity
+    print("=== Identity ===")
+    ident = _status_identity()
+    if ident is None:
+        print("  (skipped)")
+    else:
+        print(f"  {ident.describe()}")
+
+    # 2. bots.yaml
+    print("\n=== bots.yaml ===")
+    bots_path = config.root_dir() / "bots.yaml"
+    if not bots_path.exists():
+        print(f"  (无 {bots_path}；cp feishu_hub/templates/bots.yaml.tmpl {bots_path})")
+    else:
+        try:
+            bots = bot_role.load_bots(bots_path)
+        except bot_role.BotRoleConfigError as e:
+            print(f"  [err] {e}")
+            bots = []
+        if not bots:
+            print("  (空)")
+        for b in bots:
+            tag = f" → {b.next_bot_mention}" if b.next_bot_mention else ""
+            print(f"  - role={b.role:<10} mention={b.mention_alias:<10} "
+                  f"app={b.app_id[-12:]} runner={b.runner}{tag}")
+
+    # 3. M3.C 接力链 cache
+    print("\n=== M3.C 接力链（state/m3c_chats）===")
+    chats_dir = config.root_dir() / "state" / "m3c_chats"
+    if not chats_dir.exists():
+        print("  (无)")
+    else:
+        import json as _json
+        entries = sorted(chats_dir.glob("*.json"))
+        if not entries:
+            print("  (无)")
+        for p in entries:
+            try:
+                data = _json.loads(p.read_text(encoding="utf-8"))
+                short = p.stem[-12:]
+                print(f"  - chat=...{short}  task={data.get('guid','?')}  {data.get('url','')}")
+            except (OSError, ValueError):
+                continue
+
+    # 4. daemon 进程
+    print("\n=== bot-bridge daemon ===")
+    pids = _status_daemon_pids()
+    if not pids:
+        print("  无进程在跑")
+    else:
+        print(f"  {len(pids)} 个 daemon：pid={pids}")
+
+    return 0
+
+
 def cmd_bot_bridge(args: argparse.Namespace) -> int:
     """启动单 bot daemon：消费 IM 事件 → 路由到 runner → thread reply（M3.C）。"""
     from . import bot_bridge, bot_role, config
@@ -382,6 +469,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_bot.add_argument("--max-events", type=int, default=0,
                        help="lark-cli event consume --max-events；0=不限")
     p_bot.set_defaults(func=cmd_bot_bridge)
+
+    p_status = sub.add_parser(
+        "status",
+        help="看板：identity / bots.yaml / M3.C 接力链 / bot-bridge daemon 进程",
+    )
+    p_status.set_defaults(func=cmd_status)
 
     return p
 
