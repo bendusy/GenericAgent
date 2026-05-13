@@ -77,6 +77,35 @@ bots:
         br.load_bots(p)
 
 
+def test_load_bots_reads_relay_writer_app_id(tmp_path: Path):
+    """relay_writer_app_id 可选；让多机 daemon 把 relay_task 都写到同一身份下，
+    跨 bot 收敛到同一飞书 task guid（per-bot idempotency 限制的 workaround）。"""
+    p = tmp_path / "bots.yaml"
+    p.write_text(
+        """
+bots:
+  - app_id: cli_a
+    role: reviewer
+    mention_alias: A
+    runner: noop
+    default_cwd: /tmp
+    prompt_template: x
+    relay_writer_app_id: cli_writer_central
+  - app_id: cli_b
+    role: scribe
+    mention_alias: B
+    runner: noop
+    default_cwd: /tmp
+    prompt_template: x
+""",
+        encoding="utf-8",
+    )
+    bots = br.load_bots(p)
+    assert bots[0].relay_writer_app_id == "cli_writer_central"
+    # 没设的 bot 默认空
+    assert bots[1].relay_writer_app_id == ""
+
+
 def test_load_bots_preserves_chat_whitelist_as_tuple(tmp_path: Path):
     p = tmp_path / "bots.yaml"
     p.write_text(

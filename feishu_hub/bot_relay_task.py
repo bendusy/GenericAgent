@@ -79,7 +79,7 @@ def _format_step(bot: BotRole, action: BotAction, message_brief: str) -> str:
     return f"{marker} [{bot.role}] {bot.app_id[-8:]} → {message_brief}{suffix}"
 
 
-def _ensure_task(chat_id: str, bot: BotRole) -> TaskRef:
+def _ensure_task(chat_id: str, bot: BotRole, writer_profile: Optional[str]) -> TaskRef:
     cached = _load_cached(chat_id)
     if cached:
         return cached
@@ -89,6 +89,7 @@ def _ensure_task(chat_id: str, bot: BotRole) -> TaskRef:
         summary=f"M3.C 接力链 · {_short_chat(chat_id)}",
         description=f"IM chat_id={chat_id}（feishu_hub.bot_relay_task 自动建）",
         idempotency_key=f"m3c-relay-task:{chat_id}",
+        profile=writer_profile,
     )
     _save_cached(chat_id, ref)
     return ref
@@ -100,12 +101,19 @@ def record(
     action: BotAction,
     message_brief: str,
 ) -> Optional[TaskRef]:
-    """落 step；按 chat_id 复用同一飞书 task。``chat_id`` 缺失则 no-op。"""
+    """落 step；按 chat_id 复用同一飞书 task。``chat_id`` 缺失则 no-op。
+
+    ``bot.relay_writer_app_id`` 非空时所有 lark-cli 调用都加 ``--profile``，
+    把 relay_task 写到指定 bot 身份下——跨机/跨角色收敛到同一 task guid。
+    （前提：本机有该 profile 且 token 有效。）
+    """
     chat_id = action.chat_id
     if not chat_id:
         return None
-    ref = _ensure_task(chat_id, bot)
+    writer_profile = bot.relay_writer_app_id or None
+    ref = _ensure_task(chat_id, bot, writer_profile)
     step = _format_step(bot, action, message_brief)
     idem = f"m3c-step:{action.source_message_id}:{bot.app_id}"
-    task_writer.append_steps(ref.guid, [step], idempotency_key=idem)
+    task_writer.append_steps(ref.guid, [step], idempotency_key=idem,
+                             profile=writer_profile)
     return ref

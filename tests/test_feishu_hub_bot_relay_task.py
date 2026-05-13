@@ -61,9 +61,9 @@ def fake_writer(monkeypatch):
         state.creates.append({"summary": summary, "agent": agent, "kw": kw})
         return TaskRef(guid=f"g_{len(state.creates)}", url=f"https://t.io/{len(state.creates)}")
 
-    def fake_append(guid, steps, *, idempotency_key=None):
+    def fake_append(guid, steps, *, idempotency_key=None, **kw):
         state.appends.append({"guid": guid, "steps": list(steps),
-                              "idempotency_key": idempotency_key})
+                              "idempotency_key": idempotency_key, **kw})
 
     monkeypatch.setattr(brt.task_writer, "create_task", fake_create)
     monkeypatch.setattr(brt.task_writer, "append_steps", fake_append)
@@ -134,6 +134,49 @@ def test_step_content_marks_runner_failure(isolated_state, fake_writer):
                message_brief="x")
     step = fake_writer.appends[0]["steps"][0]
     assert "❌" in step or "exit=1" in step
+
+
+def test_record_routes_to_relay_writer_profile_when_set(isolated_state, monkeypatch):
+    """relay_writer_app_id 非空 → task_writer.create_task / append_steps 都带 profile=
+    那个 app_id，让两机的 relay_task 在同一身份下收敛到同一 task guid。"""
+    create_calls = []
+    append_calls = []
+
+    def fake_create(agent, cwd, summary, *, description="", **kw):
+        create_calls.append(kw)
+        return TaskRef(guid="g1", url="u1")
+
+    def fake_append(guid, steps, *, idempotency_key=None, profile=None):
+        append_calls.append({"profile": profile})
+
+    monkeypatch.setattr(brt.task_writer, "create_task", fake_create)
+    monkeypatch.setattr(brt.task_writer, "append_steps", fake_append)
+
+    bot = _bot(relay_writer_app_id="cli_central_writer")
+    brt.record(bot=bot, action=_action(), message_brief="x")
+    assert create_calls[0]["profile"] == "cli_central_writer"
+    assert append_calls[0]["profile"] == "cli_central_writer"
+
+
+def test_record_default_profile_none_when_no_writer_configured(isolated_state, monkeypatch):
+    """relay_writer_app_id 空 = 不传 --profile，沿用当前 active profile（向后兼容）。"""
+    create_calls = []
+    append_calls = []
+
+    def fake_create(agent, cwd, summary, *, description="", **kw):
+        create_calls.append(kw)
+        return TaskRef(guid="g1", url="u1")
+
+    def fake_append(guid, steps, *, idempotency_key=None, profile=None):
+        append_calls.append({"profile": profile})
+
+    monkeypatch.setattr(brt.task_writer, "create_task", fake_create)
+    monkeypatch.setattr(brt.task_writer, "append_steps", fake_append)
+
+    bot = _bot()
+    brt.record(bot=bot, action=_action(), message_brief="x")
+    assert create_calls[0].get("profile") in (None, "")
+    assert append_calls[0]["profile"] in (None, "")
 
 
 def test_record_uses_idempotent_step_key(isolated_state, fake_writer):

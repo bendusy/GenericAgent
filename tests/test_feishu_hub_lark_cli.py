@@ -189,6 +189,28 @@ def test_im_messages_reply_routes_profile_global_flag(mock_run):
     assert argv[pi + 1] == "cli_other"
 
 
+# ---- run_json + profile kwarg ----------------------------------------------
+
+@patch("feishu_hub.lark_cli.subprocess.run")
+def test_run_json_inserts_profile_before_subcommand(mock_run):
+    mock_run.return_value = _completed(0, "{}", "")
+    lc.run_json(["im", "+messages-send", "--text", "x"], profile="cli_other")
+    argv = mock_run.call_args[0][0]
+    # binary first, --profile before subcommand
+    pi = argv.index("--profile")
+    im_i = argv.index("im")
+    assert pi == 1 and im_i > pi, f"expected --profile right after binary, got {argv}"
+    assert argv[pi + 1] == "cli_other"
+
+
+@patch("feishu_hub.lark_cli.subprocess.run")
+def test_run_json_no_profile_when_none(mock_run):
+    mock_run.return_value = _completed(0, "{}", "")
+    lc.run_json(["auth", "status"])
+    argv = mock_run.call_args[0][0]
+    assert "--profile" not in argv
+
+
 # ---- docs_create_v2 / docs_update_overwrite ---------------------------------
 
 @patch("feishu_hub.lark_cli.subprocess.run")

@@ -41,6 +41,10 @@ class BotRole:
     reply_template: str = ""
     chat_whitelist: Tuple[str, ...] = ()
     next_bot_mention: str = ""
+    # M3.C：所有 bot 把 relay_task 都用此 app_id 调 lark-cli，跨机收敛到同一 task。
+    # 空 = 用 bot 自己身份（per-bot 各建一个 task；向后兼容默认）。
+    # 要 work 还需要本机有该 app_id 的 lark-cli profile 且 token 有效。
+    relay_writer_app_id: str = ""
 
 
 def _yaml():
@@ -90,6 +94,7 @@ def load_bots(path: Path) -> List[BotRole]:
             reply_template=str(item.get("reply_template") or ""),
             chat_whitelist=whitelist,
             next_bot_mention=str(item.get("next_bot_mention") or ""),
+            relay_writer_app_id=str(item.get("relay_writer_app_id") or ""),
         ))
     return out
 

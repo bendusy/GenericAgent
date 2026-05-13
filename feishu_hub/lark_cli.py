@@ -60,8 +60,12 @@ def run_json(
     jq: Optional[str] = None,
     binary: Optional[str] = None,
     retries: int = 1,
+    profile: Optional[str] = None,
 ) -> Any:
     """运行 lark-cli，强制 ``--format json``，解析 stdout。
+
+    ``profile`` 非空时插入 ``--profile X`` global flag（必须在子命令前）；
+    多 bot 协作场景下用它指定调用哪个 lark-cli profile。
 
     Returns
     -------
@@ -71,7 +75,10 @@ def run_json(
     bin_ = binary or _binary()
     # lark-cli 多数子命令默认就输出 JSON 且不接受 --format flag（如 im +messages-send /
     # docs +create）；仅当调用方显式在 argv 里给了 --format 才透传。
-    full = [bin_, *list(argv)]
+    full: List[str] = [bin_]
+    if profile:
+        full += ["--profile", profile]
+    full += list(argv)
     if jq:
         full += ["--jq", jq]
 

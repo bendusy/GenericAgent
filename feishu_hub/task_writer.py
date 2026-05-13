@@ -48,6 +48,7 @@ def create_task(
     assignee_open_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
     host: Optional[str] = None,
+    profile: Optional[str] = None,
 ) -> TaskRef:
     """bot 身份建任务。``assignee_open_id`` 把 user 作为 assignee 加入。
 
@@ -83,7 +84,7 @@ def create_task(
     if idempotency_key:
         argv += ["--idempotency-key", idempotency_key]
 
-    resp = run_json(argv, timeout=30)
+    resp = run_json(argv, timeout=30, profile=profile)
     # task +create shortcut 返回 {ok, identity, data:{guid, url}}；run_json 会解析
     data = resp.get("data", resp) if isinstance(resp, dict) else {}
     return TaskRef(guid=data["guid"], url=data["url"])
@@ -94,6 +95,7 @@ def append_steps(
     steps: Sequence[str],
     *,
     idempotency_key: Optional[str] = None,
+    profile: Optional[str] = None,
 ) -> None:
     """bot 身份追加步骤。空 ``steps`` 直接返回不调 lark-cli。"""
     if not steps:
@@ -118,7 +120,7 @@ def append_steps(
         # task 步骤等价于 agent 内部行为，不需要用户每次同意）。
         "--yes",
     ]
-    run_json(argv, timeout=30)
+    run_json(argv, timeout=30, profile=profile)
 
 
 # --- T3: session cache layer ---

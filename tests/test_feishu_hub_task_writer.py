@@ -141,6 +141,33 @@ def test_append_steps_empty_no_op(run_json):
 
 
 @patch("feishu_hub.task_writer.run_json")
+def test_create_task_threads_profile_kwarg(run_json, monkeypatch):
+    """relay_writer 场景：create_task 接 profile= 透传给 run_json。"""
+    monkeypatch.setenv("FEISHU_HUB_HOST", "h")
+    run_json.return_value = {"guid": "g", "url": "u"}
+    create_task(agent="cc", cwd="/r", summary="s",
+                profile="cli_writer", idempotency_key="k")
+    kw = run_json.call_args.kwargs
+    assert kw.get("profile") == "cli_writer"
+
+
+@patch("feishu_hub.task_writer.run_json")
+def test_create_task_no_profile_when_not_passed(run_json, monkeypatch):
+    monkeypatch.setenv("FEISHU_HUB_HOST", "h")
+    run_json.return_value = {"guid": "g", "url": "u"}
+    create_task(agent="cc", cwd="/r", summary="s")
+    assert "profile" not in run_json.call_args.kwargs or run_json.call_args.kwargs.get("profile") is None
+
+
+@patch("feishu_hub.task_writer.run_json")
+def test_append_steps_threads_profile_kwarg(run_json):
+    run_json.return_value = {"ok": True}
+    append_steps("g", ["step1"], profile="cli_writer", idempotency_key="k")
+    kw = run_json.call_args.kwargs
+    assert kw.get("profile") == "cli_writer"
+
+
+@patch("feishu_hub.task_writer.run_json")
 def test_create_task_propagates_lark_cli_error(run_json):
     from feishu_hub.lark_cli import LarkCLIError
 
