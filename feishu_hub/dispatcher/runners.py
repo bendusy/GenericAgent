@@ -55,6 +55,7 @@ class RunResult:
     final_text: Optional[str] = None  # CC json 解析后的最终文本（如能拿到）
     aborted: bool = False
     abort_reason: Optional[str] = None
+    adjust_attempts: int = 0
 
 
 # ---- 内部 helper --------------------------------------------------------

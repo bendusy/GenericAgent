@@ -340,3 +340,22 @@ def test_run_subprocess_killed_returns_negative_exit():
              spec, agent_name="test", ctx=None, on_pid=kill_it)
     assert r.exit_code == -15
     assert r.timed_out is False
+
+
+def test_runresult_has_adjust_attempts_default_zero():
+    from feishu_hub.dispatcher.runners import RunResult
+    r = RunResult(
+        runner="noop", exit_code=0, stdout="", stderr="",
+        stdout_head="", stderr_head="", duration_ms=0, timed_out=False,
+    )
+    assert r.adjust_attempts == 0
+
+
+def test_runresult_adjust_attempts_settable():
+    from feishu_hub.dispatcher.runners import RunResult
+    r = RunResult(
+        runner="noop", exit_code=0, stdout="", stderr="",
+        stdout_head="", stderr_head="", duration_ms=0, timed_out=False,
+        adjust_attempts=1,
+    )
+    assert r.adjust_attempts == 1

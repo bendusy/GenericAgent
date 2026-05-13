@@ -40,6 +40,7 @@ class BotAction:
     timed_out: bool
     aborted: bool = False
     abort_reason: Optional[str] = None
+    adjust_attempts: int = 0
 
 
 Runner = Callable[..., RunResult]  # (RunSpec, *, on_pid=None) → RunResult
