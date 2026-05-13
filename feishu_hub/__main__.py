@@ -389,6 +389,7 @@ def cmd_bot_bridge(args: argparse.Namespace) -> int:
         selected,
         max_events=args.max_events,
         timeout=args.timeout,
+        parallel=not args.sequential,
     ):
         n += 1
         print(f"[bot-bridge] #{n} src={action.source_message_id} "
@@ -468,6 +469,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="lark-cli event consume --timeout（如 5m / 30s）；空=不限")
     p_bot.add_argument("--max-events", type=int, default=0,
                        help="lark-cli event consume --max-events；0=不限")
+    p_bot.add_argument("--sequential", action="store_true",
+                       help="同步模式：handle_event 阻塞主循环（默认 parallel，让 R5 HITL /stop 即时响应）")
     p_bot.set_defaults(func=cmd_bot_bridge)
 
     p_status = sub.add_parser(
