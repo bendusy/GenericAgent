@@ -273,3 +273,24 @@ def test_cc_headless_respects_timeout(monkeypatch):
                       return_value=_cp(0, "{}", "")) as mk:
         runners.cc_headless(_spec(timeout_s=42))
     assert mk.call_args.kwargs["timeout"] == 42
+
+
+def test_runresult_has_aborted_field_defaults_false():
+    from feishu_hub.dispatcher.runners import RunResult
+    r = RunResult(
+        runner="noop", exit_code=0, stdout="", stderr="",
+        stdout_head="", stderr_head="", duration_ms=0, timed_out=False,
+    )
+    assert r.aborted is False
+    assert r.abort_reason is None
+
+
+def test_runresult_aborted_settable():
+    from feishu_hub.dispatcher.runners import RunResult
+    r = RunResult(
+        runner="noop", exit_code=-15, stdout="", stderr="",
+        stdout_head="", stderr_head="", duration_ms=0, timed_out=False,
+        aborted=True, abort_reason="/stop",
+    )
+    assert r.aborted is True
+    assert r.abort_reason == "/stop"

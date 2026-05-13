@@ -53,6 +53,8 @@ class RunResult:
     cost_cents: Optional[int] = None
     tokens: Optional[int] = None
     final_text: Optional[str] = None  # CC json 解析后的最终文本（如能拿到）
+    aborted: bool = False
+    abort_reason: Optional[str] = None
 
 
 # ---- 内部 helper --------------------------------------------------------
