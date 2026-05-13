@@ -88,7 +88,7 @@ def _format_start_step(bot: BotRole, event: Dict[str, Any], message_brief: str) 
 def _format_end_step(bot: BotRole, action: "BotAction", result_text: str) -> str:
     """完成态 step：emoji + role + 状态描述 + 摘要前 200 字。
 
-    优先级：aborted > timed_out > exit_code != 0 > 成功
+    优先级：aborted > timed_out > exit_code != 0 > adjusted+success > success
     """
     if action.aborted:
         reason = action.abort_reason or "(unknown)"
@@ -99,6 +99,8 @@ def _format_end_step(bot: BotRole, action: "BotAction", result_text: str) -> str
         snippet = (result_text or "")[:_RESULT_MAX]
         return f"❌ [{bot.role}] 失败 (exit={action.runner_exit_code})：{snippet}"
     snippet = (result_text or "(empty)")[:_RESULT_MAX]
+    if action.adjust_attempts > 0:
+        return f"✅ [{bot.role}] 调整后完成（#{action.adjust_attempts} 轮调整）：{snippet}"
     return f"✅ [{bot.role}] 完成：{snippet}"
 
 
@@ -159,3 +161,20 @@ def record_end(
         ref.guid, [step], idempotency_key=idem, profile=writer_profile,
     )
     return ref
+
+
+def record_adjust(
+    *,
+    bot: BotRole,
+    task_ref: TaskRef,
+    adjust_text: str,
+    attempt: int,
+) -> None:
+    """user `/adjust <body>` 触发后，杀 runner 重启前 append 一条 step。"""
+    writer_profile = bot.relay_writer_app_id or None
+    brief = (adjust_text or "")[:80]
+    step = f"🔄 [{bot.role}] 用户调整请求 #{attempt} (via /adjust: {brief})"
+    idem = f"m3g-step-adjust:{task_ref.guid}:{attempt}"
+    task_writer.append_steps(
+        task_ref.guid, [step], idempotency_key=idem, profile=writer_profile,
+    )

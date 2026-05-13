@@ -310,3 +310,53 @@ def test_format_end_step_aborted_takes_priority():
     assert "⚠️" in step
     assert "用户请求中止" in step
     assert "/stop" in step
+
+
+def test_format_end_step_adjust_attempts_in_success():
+    from feishu_hub import bot_relay_task as brt
+    from feishu_hub.bot_runner import BotAction
+    from feishu_hub.bot_role import BotRole
+
+    bot = BotRole(
+        app_id="cli_x", role="r", mention_alias="r",
+        runner="noop", prompt_template="{message}",
+        reply_template="{result}", default_cwd=".",
+    )
+    action = BotAction(
+        bot_app_id="cli_x", chat_id="oc_x",
+        source_message_id="om_x", reply_message_id=None,
+        runner_exit_code=0, timed_out=False,
+        adjust_attempts=1,
+    )
+    step = brt._format_end_step(bot, action, "final text")
+    assert "✅" in step
+    assert "调整后完成" in step
+    assert "#1" in step
+
+
+def test_record_adjust_calls_append_steps(monkeypatch):
+    from feishu_hub import bot_relay_task as brt, task_writer
+    from feishu_hub.bot_role import BotRole
+    from feishu_hub.task_writer import TaskRef
+
+    bot = BotRole(
+        app_id="cli_x", role="r", mention_alias="r",
+        runner="noop", prompt_template="{message}",
+        reply_template="{result}", default_cwd=".",
+    )
+    ref = TaskRef(guid="t1", url="u")
+
+    calls = []
+    def fake_append_steps(guid, steps, *, idempotency_key, profile):
+        calls.append((guid, steps, idempotency_key, profile))
+    monkeypatch.setattr(task_writer, "append_steps", fake_append_steps)
+
+    brt.record_adjust(bot=bot, task_ref=ref, adjust_text="加细节", attempt=1)
+    assert len(calls) == 1
+    guid, steps, idem, profile = calls[0]
+    assert guid == "t1"
+    assert "🔄" in steps[0]
+    assert "调整" in steps[0]
+    assert "加细节" in steps[0]
+    assert "#1" in steps[0]
+    assert "m3g-step-adjust" in idem
