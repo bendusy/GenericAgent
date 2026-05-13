@@ -6,8 +6,11 @@
 """
 from __future__ import annotations
 
+import socket
+import time
+import uuid
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Optional, Tuple
 
 from feishu_hub.lark_cli import base_record_get, base_record_upsert
 
@@ -40,3 +43,30 @@ def append_product(*, record_id: str, text: str,
     new = (old + sep + text) if old else f"--- {ts} ---\n{text}"
     base_record_upsert(base_token=base_token, table_id=table_id,
                        record_id=record_id, fields={PRODUCT_FIELD: new})
+
+
+def _make_marker() -> str:
+    host = socket.gethostname()
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return f"{host}|{ts}|{uuid.uuid4().hex[:8]}"
+
+
+def cas_acquire_running(*, record_id: str, base_token: str, table_id: str,
+                        propagation_grace_s: float = 0.5) -> Tuple[Optional[str], str]:
+    """应用层乐观锁：读→检查 idle→写 running+marker→等→re-get 校验 marker 是我的。
+
+    Returns: (marker, status)。status ∈ {"ok", "non_idle", "concurrent_conflict"}.
+    """
+    r0 = base_record_get(base_token=base_token, table_id=table_id, record_id=record_id)
+    state_list = r0.get(STATE_FIELD) or []
+    state = state_list[0] if isinstance(state_list, list) and state_list else state_list
+    if state != "idle":
+        return None, "non_idle"
+    marker = _make_marker()
+    base_record_upsert(base_token=base_token, table_id=table_id, record_id=record_id,
+                       fields={STATE_FIELD: "running", MARKER_FIELD: marker})
+    time.sleep(propagation_grace_s)
+    r1 = base_record_get(base_token=base_token, table_id=table_id, record_id=record_id)
+    if r1.get(MARKER_FIELD) != marker:
+        return None, "concurrent_conflict"
+    return marker, "ok"
