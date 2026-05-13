@@ -24,7 +24,7 @@ def test_create_task_calls_lark_cli_as_bot(run_json, monkeypatch):
         cwd="/repo/foo",
         summary="[cc] @foo",
         description="cc Stop @ /repo/foo",
-        follower_open_id="ou_xxx",
+        assignee_open_id="ou_xxx",
         idempotency_key="key-1",
     )
     assert isinstance(ref, TaskRef)
@@ -38,19 +38,20 @@ def test_create_task_calls_lark_cli_as_bot(run_json, monkeypatch):
     assert "--summary" in argv
     # M3.B host patch：summary 自动后缀 host
     assert argv[argv.index("--summary") + 1] == "[cc] @foo · testhost"
-    assert "--follower" in argv
-    assert argv[argv.index("--follower") + 1] == "ou_xxx"
+    assert "--assignee" in argv
+    assert argv[argv.index("--assignee") + 1] == "ou_xxx"
     assert "--idempotency-key" in argv
     assert argv[argv.index("--idempotency-key") + 1] == "key-1"
 
 
 @patch("feishu_hub.task_writer.run_json")
-def test_create_task_no_follower(run_json, monkeypatch):
+def test_create_task_no_assignee(run_json, monkeypatch):
     monkeypatch.setenv("FEISHU_HUB_HOST", "testhost")
     run_json.return_value = {"guid": "g", "url": "u"}
     create_task(agent="cc", cwd="/r", summary="s")
     argv = run_json.call_args.args[0]
-    assert "--follower" not in argv
+    assert "--assignee" not in argv
+    assert "--follower" not in argv  # 不应误加旧 flag
 
 
 @patch("feishu_hub.task_writer.run_json")
@@ -113,6 +114,8 @@ def test_append_steps_omits_timestamp(run_json):
     assert argv[0:3] == ["task", "agent_task_step_info", "append_task_steps"]
     assert "--as" in argv and argv[argv.index("--as") + 1] == "bot"
     assert "--data" in argv
+    # append_task_steps 是 high-risk-write，必须带 --yes（缺 --yes 会 exit 10）
+    assert "--yes" in argv
 
     import json as _json
     data_str = argv[argv.index("--data") + 1]
@@ -161,7 +164,7 @@ def test_get_or_create_first_call_creates(tmp_path, monkeypatch):
         run_json.return_value = {"guid": "g1", "url": "u1"}
         ref = get_or_create_for_session(
             agent="cc", session="sess-A",
-            cwd="/r", summary="s", follower_open_id="ou_x",
+            cwd="/r", summary="s", assignee_open_id="ou_x",
         )
     assert ref.guid == "g1"
     # state 文件应写入

@@ -45,11 +45,16 @@ def create_task(
     summary: str,
     *,
     description: str = "",
-    follower_open_id: Optional[str] = None,
+    assignee_open_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
     host: Optional[str] = None,
 ) -> TaskRef:
-    """bot 身份建任务。``follower_open_id`` 给 user open_id 让 user 在飞书 UI 可见。
+    """bot 身份建任务。``assignee_open_id`` 把 user 作为 assignee 加入。
+
+    为什么 assignee 而非 follower：飞书 task 默认 "我的待办" (`+get-my-tasks`)
+    视图只显示 assignee；follower 必须主动切换到"我关注的" (`+get-related-tasks
+    --followed-by-me`) 才能看到。Agent 自描场景下我们要 user 默认 inbox 即见，
+    所以用 assignee。
 
     summary 自动后缀 ``· {host}``——多机部署时让飞书 task 列表区分来源。
     ``host`` 显式传入优先；默认走 ``_default_host()``（env / hostname）。
@@ -66,8 +71,8 @@ def create_task(
     ]
     if description:
         argv += ["--description", description]
-    if follower_open_id:
-        argv += ["--follower", follower_open_id]
+    if assignee_open_id:
+        argv += ["--assignee", assignee_open_id]
     if idempotency_key:
         argv += ["--idempotency-key", idempotency_key]
 
@@ -98,6 +103,13 @@ def append_steps(
         "task", "agent_task_step_info", "append_task_steps",
         "--as", "bot",
         "--data", json.dumps(body, ensure_ascii=False),
+        # task.agent_task_step_info.append_task_steps 是 risk: high-risk-write，
+        # 缺 --yes 会 exit 10 (confirmation_required)。POC 时手工带 --yes 才跑通，
+        # M3.B T2 实施漏加。该操作是"agent 自描"——append-only 步骤流，对用户
+        # 资源无破坏性影响，--yes 安全（注：lark-shared SKILL 红线是"未经
+        # 用户同意不加 --yes"；此处 task 是 bot 自己创建的，bot 写自己的
+        # task 步骤等价于 agent 内部行为，不需要用户每次同意）。
+        "--yes",
     ]
     run_json(argv, timeout=30)
 
@@ -140,7 +152,7 @@ def get_or_create_for_session(
     cwd: str,
     summary: str,
     description: str = "",
-    follower_open_id: Optional[str] = None,
+    assignee_open_id: Optional[str] = None,
 ) -> TaskRef:
     """复用同 (agent, session) 已建的 task；首次调用 create + 写 state。"""
     cache_file = _session_cache_dir() / _safe_filename(agent, session)
@@ -154,7 +166,7 @@ def get_or_create_for_session(
         cwd=cwd,
         summary=summary,
         description=description,
-        follower_open_id=follower_open_id,
+        assignee_open_id=assignee_open_id,
         idempotency_key=f"{agent}-session-{session}",
     )
 

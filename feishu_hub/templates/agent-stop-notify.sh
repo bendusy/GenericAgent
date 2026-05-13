@@ -28,5 +28,5 @@ python3 -m feishu_hub.stop_hook \
   --session "${SESSION:-no-session}" \
   --cwd "$CWD" \
   --summary "${SUMMARY:-}" \
-  --follower-open-id "$TARGET" \
+  --assignee-open-id "$TARGET" \
   >/dev/null 2>&1 || true

@@ -32,10 +32,10 @@ def run(
     session: str,
     cwd: str,
     summary: str,
-    follower_open_id: Optional[str],
+    assignee_open_id: Optional[str],
 ) -> int:
     """主入口。失败兜底不阻塞 agent。"""
-    if not follower_open_id:
+    if not assignee_open_id:
         return 0  # 没配通知对象 → 静默退出
 
     try:
@@ -45,7 +45,7 @@ def run(
             cwd=cwd,
             summary=f"[{agent}] @ {cwd.rsplit('/', 1)[-1]}",
             description=f"Agent {agent} working in {cwd}",
-            follower_open_id=follower_open_id,
+            assignee_open_id=assignee_open_id,
         )
         task_writer.append_steps(
             ref.guid,
@@ -57,7 +57,7 @@ def run(
         sys.stderr.write(f"[feishu_hub.stop_hook] task path failed: {e}\n")
         # 降级到 IM text 兜底
         _send_im_fallback(
-            follower_open_id,
+            assignee_open_id,
             f"[{agent}] @ {cwd.rsplit('/', 1)[-1]}: {summary[:120]}",
             f"{agent}-stop-{session}-fallback",
         )
@@ -70,6 +70,9 @@ def _main() -> int:
     p.add_argument("--session", required=True)
     p.add_argument("--cwd", required=True)
     p.add_argument("--summary", default="")
+    # 接受两种 CLI flag：新 --assignee-open-id（推荐）+ 旧 --follower-open-id
+    # （兼容已部署在 ~/.feishu_hub/bin/agent-stop-notify.sh 的旧 shell 脚本）。
+    p.add_argument("--assignee-open-id", default="")
     p.add_argument("--follower-open-id", default="")
     args = p.parse_args()
     return run(
@@ -77,7 +80,7 @@ def _main() -> int:
         session=args.session,
         cwd=args.cwd,
         summary=args.summary,
-        follower_open_id=args.follower_open_id,
+        assignee_open_id=args.assignee_open_id or args.follower_open_id,
     )
 
 
