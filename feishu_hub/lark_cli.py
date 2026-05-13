@@ -448,6 +448,25 @@ def base_record_search(
     return list(items) if isinstance(items, list) else []
 
 
+def base_record_delete(
+    *,
+    base_token: str,
+    table_id: str,
+    record_id: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    binary: Optional[str] = None,
+) -> None:
+    """``base +record-delete --yes``（high-risk-write，必须带 ``--yes`` 才执行）。"""
+    argv = [
+        "base", "+record-delete",
+        "--base-token", base_token,
+        "--table-id", table_id,
+        "--record-id", record_id,
+        "--yes",
+    ]
+    run_json(argv, timeout=timeout, binary=binary)
+
+
 # ---- 组合便利函数 ---------------------------------------------------------
 
 def find_or_create_folder(
