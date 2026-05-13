@@ -144,6 +144,54 @@ class TestBaseRecordSearch:
         assert payload.get("limit") == 50
 
 
+# --- base_record_list -----------------------------------------------------
+
+class TestBaseRecordList:
+    @patch("feishu_hub.lark_cli.run_json")
+    def test_base_record_list_returns_data_dict(self, run_json):
+        run_json.return_value = {
+            "code": 0,
+            "data": {
+                "items": [{"record_id": "r1", "fields": {"x": 1}}],
+                "has_more": False,
+            },
+        }
+        from feishu_hub.lark_cli import base_record_list
+
+        data = base_record_list(base_token="bt", table_id="tbl")
+        assert "items" in data
+        assert data["items"][0]["record_id"] == "r1"
+        assert data["has_more"] is False
+        argv = run_json.call_args.args[0]
+        assert argv[:2] == ["base", "+record-list"]
+        assert "--base-token" in argv and argv[argv.index("--base-token") + 1] == "bt"
+        assert "--table-id" in argv and argv[argv.index("--table-id") + 1] == "tbl"
+        assert "--format" in argv and argv[argv.index("--format") + 1] == "json"
+        assert "--limit" in argv and argv[argv.index("--limit") + 1] == "100"
+        assert "--offset" in argv and argv[argv.index("--offset") + 1] == "0"
+
+    @patch("feishu_hub.lark_cli.run_json")
+    def test_base_record_list_passes_view_id_when_given(self, run_json):
+        run_json.return_value = {"code": 0, "data": {"items": [], "has_more": False}}
+        from feishu_hub.lark_cli import base_record_list
+
+        base_record_list(base_token="bt", table_id="tbl", view_id="vwAbc")
+        argv = run_json.call_args.args[0]
+        assert "--view-id" in argv
+        assert argv[argv.index("--view-id") + 1] == "vwAbc"
+
+    @patch("feishu_hub.lark_cli.run_json")
+    def test_base_record_list_raises_on_business_code_nonzero(self, run_json):
+        run_json.return_value = {"code": 99, "msg": "boom", "data": {}}
+        from feishu_hub.lark_cli import base_record_list, LarkCLIError
+        import pytest
+
+        with pytest.raises(LarkCLIError) as exc:
+            base_record_list(base_token="bt", table_id="tbl")
+        assert exc.value.code == 99
+        assert "boom" in exc.value.msg
+
+
 # --- base_record_delete ---------------------------------------------------
 
 class TestBaseRecordDelete:

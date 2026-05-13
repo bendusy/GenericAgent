@@ -465,6 +465,47 @@ def base_record_search(
     return list(items) if isinstance(items, list) else []
 
 
+def base_record_list(
+    *,
+    base_token: str,
+    table_id: str,
+    view_id: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    fields: Optional[Sequence[str]] = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    binary: Optional[str] = None,
+) -> Dict[str, Any]:
+    """``base +record-list``：分页列出记录。
+
+    Use this (not ``+record-search``) for structured filtering — pass ``view_id``
+    of a pre-filtered view, OR list all + filter in Python.
+
+    返回原始 ``data`` 字典：``{items: [...], has_more: bool, ...}``。
+    """
+    argv: List[str] = [
+        "base", "+record-list",
+        "--base-token", base_token,
+        "--table-id", table_id,
+        "--format", "json",
+        "--limit", str(limit),
+        "--offset", str(offset),
+    ]
+    if view_id:
+        argv += ["--view-id", view_id]
+    if fields:
+        for f in fields:
+            argv += ["--field-id", f]
+    body = run_json(argv, timeout=timeout, binary=binary)
+    if isinstance(body, dict):
+        biz_code = body.get("code", 0)
+        if isinstance(biz_code, int) and biz_code != 0:
+            biz_msg = body.get("msg") if isinstance(body.get("msg"), str) else ""
+            raise LarkCLIError(biz_code, biz_msg or "record-list business error",
+                               argv, stdout=json.dumps(body, ensure_ascii=False)[:500])
+    return body.get("data", {}) if isinstance(body, dict) else {}
+
+
 def base_record_delete(
     *,
     base_token: str,
