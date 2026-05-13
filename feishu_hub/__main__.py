@@ -145,6 +145,28 @@ def cmd_shim(args: argparse.Namespace) -> int:
     return shim_mod.main(["lark-cli", *sub])
 
 
+def cmd_guide(args: argparse.Namespace) -> int:
+    """在飞书侧建 3 个引导任务（产品式 onboarding）。可作 init 末尾自动 + 单独重跑。"""
+    from . import onboarding
+
+    cfg = cfgmod.load(apply_env=False) or {}
+    bt = cfg.get("bitable") or {}
+    base_token = (bt or {}).get("base_token")
+    table_id = (bt or {}).get("table_id")
+    base_url = (
+        f"https://feishu.cn/base/{base_token}?table={table_id}"
+        if base_token and table_id else None
+    )
+
+    refs = onboarding.create_welcome_tasks(base_url=base_url)
+    if not refs:
+        print("[guide] 0 个引导任务建成（identity 不齐？跑 `python -m feishu_hub whoami` 看）")
+        return 1
+    print()
+    print(f"完成：{len(refs)} 个引导任务已建到你飞书 inbox。打开飞书 → 我的待办 即可看到。")
+    return 0
+
+
 def cmd_indexer(args: argparse.Namespace) -> int:
     """从飞书 Task 列表反向刷出 Base 索引表（M3.D）。"""
     from . import base_indexer
@@ -250,6 +272,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="打印当前 feishu_hub 身份（profile / user / bot / host）—— 多 user/多 bot 切换后用这个确认",
     )
     p_whoami.set_defaults(func=cmd_whoami)
+
+    p_guide = sub.add_parser(
+        "guide",
+        help="在你飞书 inbox 自动建 3 个引导任务（init 末尾自动跑；可单独 re-run）",
+    )
+    p_guide.set_defaults(func=cmd_guide)
 
     p_indexer = sub.add_parser(
         "indexer",
