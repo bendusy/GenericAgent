@@ -380,6 +380,42 @@ def base_record_get(
     return fields if isinstance(fields, dict) else {}
 
 
+def base_record_upsert(
+    *,
+    base_token: str,
+    table_id: str,
+    fields: Mapping[str, Any],
+    record_id: Optional[str] = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    binary: Optional[str] = None,
+) -> str:
+    """``base +record-upsert``：``record_id`` 空 → 创建；否则 → 更新。
+
+    返回 record_id：create 路径从 ``data.record.record_id_list[0]`` 抽；
+    update 路径直接 passthrough 入参。
+    """
+    argv: List[str] = [
+        "base", "+record-upsert",
+        "--base-token", base_token,
+        "--table-id", table_id,
+        "--json", json.dumps(dict(fields), ensure_ascii=False),
+    ]
+    if record_id:
+        argv += ["--record-id", record_id]
+    body = run_json(argv, timeout=timeout, binary=binary)
+    if record_id:
+        return record_id
+    rid_list = _pluck(body, ("data", "record", "record_id_list"))
+    if isinstance(rid_list, list) and rid_list:
+        return str(rid_list[0])
+    # 兜底：部分形态 data.record.record_id
+    fallback = _pluck(body, ("data", "record", "record_id"))
+    if isinstance(fallback, str) and fallback:
+        return fallback
+    raise LarkCLIError(-1, "record-upsert response missing record_id", argv,
+                       stdout=json.dumps(body)[:500] if body else "")
+
+
 # ---- 组合便利函数 ---------------------------------------------------------
 
 def find_or_create_folder(
