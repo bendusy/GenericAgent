@@ -286,3 +286,65 @@ def test_existing_trace_continues_and_increments_depth(events):
     assert final["actor"]["trace_id"] == "T_KEEP"
     assert final["actor"]["depth"] == 2
     assert final["actor"]["parent_event_id"] == "E5"
+
+
+# ---- T5: runner 完成 → 追加 task step ----------------------------------
+
+def test_runner_completion_appends_task_step_when_actor_has_task_guid(events, monkeypatch):
+    """envelope.actor.task_guid 存在时，runner 完成会触发 task_writer.append_steps。"""
+    from unittest.mock import MagicMock
+
+    # 直接对当前 loop 模块对象 setattr，规避 cli_m3a 测试清 sys.modules 后
+    # `patch("feishu_hub.dispatcher.loop.task_writer")` 命中新缓存而非测试持有的旧模块的问题。
+    tw = MagicMock()
+    monkeypatch.setattr(loop, "task_writer", tw)
+
+    r = _rule(when={"event_type": "task_done"})
+    dctx = loop.DispatchContext(
+        rules=[r],
+        runaway=trace.RunawayTracker(window_s=60, threshold=3),
+        budget_state=budget.BudgetState(),
+        emit=events.append,
+        run_fn=lambda spec, ctx: runners.RunResult(
+            runner=spec.runner, exit_code=0, stdout="done", stderr="",
+            stdout_head="done", stderr_head="", duration_ms=10,
+            timed_out=False, final_text="done-final",
+        ),
+    )
+    incoming = {
+        "event_type": "task_done",
+        "event_id": "E_T5_1",
+        "actor": {"agent": "cc", "task_guid": "g-xyz"},
+    }
+    loop.dispatch_event(incoming, dctx)
+    tw.append_steps.assert_called_once()
+    call_args = tw.append_steps.call_args
+    first = call_args.args[0] if call_args.args else call_args.kwargs.get("task_guid")
+    assert first == "g-xyz"
+
+
+def test_runner_completion_skips_when_no_task_guid(events, monkeypatch):
+    """无 task_guid 时 task_writer.append_steps 不应被调用。"""
+    from unittest.mock import MagicMock
+
+    tw = MagicMock()
+    monkeypatch.setattr(loop, "task_writer", tw)
+
+    r = _rule(when={"event_type": "task_done"})
+    dctx = loop.DispatchContext(
+        rules=[r],
+        runaway=trace.RunawayTracker(window_s=60, threshold=3),
+        budget_state=budget.BudgetState(),
+        emit=events.append,
+        run_fn=lambda spec, ctx: runners.RunResult(
+            runner=spec.runner, exit_code=0, stdout="", stderr="",
+            stdout_head="", stderr_head="", duration_ms=1,
+            timed_out=False, final_text="",
+        ),
+    )
+    loop.dispatch_event(
+        {"event_type": "task_done", "event_id": "E_T5_2",
+         "actor": {"agent": "cc"}},
+        dctx,
+    )
+    tw.append_steps.assert_not_called()
