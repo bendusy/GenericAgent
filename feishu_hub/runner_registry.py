@@ -72,7 +72,9 @@ class RunnerRegistry:
         )
 
     def unregister(self, task_guid: str) -> None:
-        for p in (self._entry_path(task_guid), self._sentinel_path(task_guid)):
+        for p in (self._entry_path(task_guid),
+                  self._sentinel_path(task_guid),
+                  self._adjust_sentinel_path(task_guid)):
             try:
                 p.unlink()
             except FileNotFoundError:
@@ -95,6 +97,23 @@ class RunnerRegistry:
 
     def read_abort_sentinel(self, task_guid: str) -> Optional[str]:
         p = self._sentinel_path(task_guid)
+        if not p.exists():
+            return None
+        try:
+            return p.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+    def _adjust_sentinel_path(self, task_guid: str) -> Path:
+        return self._root / f"{_safe(task_guid)}.adjust"
+
+    def write_adjust_sentinel(self, task_guid: str, supplement: str) -> Path:
+        p = self._adjust_sentinel_path(task_guid)
+        p.write_text(supplement, encoding="utf-8")
+        return p
+
+    def read_adjust_sentinel(self, task_guid: str) -> Optional[str]:
+        p = self._adjust_sentinel_path(task_guid)
         if not p.exists():
             return None
         try:

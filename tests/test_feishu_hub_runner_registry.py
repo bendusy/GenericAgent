@@ -92,3 +92,23 @@ def test_cleanup_orphans_removes_dead_pids(registry, monkeypatch):
     assert n == 1
     assert registry.lookup("alive") is not None
     assert registry.lookup("dead") is None
+
+
+def test_write_and_read_adjust_sentinel(registry):
+    registry.register(_entry())
+    registry.write_adjust_sentinel("t1", "加点细节")
+    assert registry.read_adjust_sentinel("t1") == "加点细节"
+
+
+def test_read_adjust_sentinel_returns_none_when_absent(registry):
+    registry.register(_entry())
+    assert registry.read_adjust_sentinel("t1") is None
+
+
+def test_unregister_also_cleans_adjust_sentinel(registry):
+    registry.register(_entry())
+    registry.write_adjust_sentinel("t1", "x")
+    registry.write_abort_sentinel("t1", "/stop")
+    registry.unregister("t1")
+    assert registry.read_adjust_sentinel("t1") is None
+    assert registry.read_abort_sentinel("t1") is None
