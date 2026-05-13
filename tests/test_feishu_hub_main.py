@@ -16,7 +16,7 @@ def test_init_creates_dirs_and_config(monkeypatch, tmp_path):
     monkeypatch.setenv(cfgmod.ENV_ROOT, str(home))
     monkeypatch.setattr(m, "_resolve_lark_cli", lambda shim_self=None: "/usr/bin/true")
 
-    rc = m.main(["init", "--no-prompt"])
+    rc = m.main(["init", "--no-prompt", "--no-install-hooks", "--no-guide"])
     assert rc == 0
 
     assert (home / "journal").is_dir()
@@ -34,7 +34,7 @@ def test_init_deploys_hook_script_executable(monkeypatch, tmp_path):
     monkeypatch.setenv(cfgmod.ENV_ROOT, str(home))
     monkeypatch.setattr(m, "_resolve_lark_cli", lambda shim_self=None: "/usr/bin/true")
 
-    m.main(["init", "--no-prompt"])
+    m.main(["init", "--no-prompt", "--no-install-hooks", "--no-guide"])
     hook = home / "bin" / "agent-stop-notify.sh"
     assert hook.is_file()
     mode = os.stat(hook).st_mode
@@ -56,7 +56,7 @@ def test_init_preserves_existing_user_values(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(m, "_resolve_lark_cli", lambda shim_self=None: "/usr/bin/true")
 
-    m.main(["init", "--no-prompt"])
+    m.main(["init", "--no-prompt", "--no-install-hooks", "--no-guide"])
 
     cfg = cfgmod.load(path=home / "config.yaml", apply_env=False)
     assert cfg["notify_receive_id"] == "ou_existing"
@@ -74,7 +74,7 @@ def test_init_missing_lark_cli_with_flag_ok(monkeypatch, tmp_path):
 
     monkeypatch.setattr(m, "_resolve_lark_cli", _raise)
 
-    rc = m.main(["init", "--no-prompt", "--allow-missing-lark-cli"])
+    rc = m.main(["init", "--no-prompt", "--no-install-hooks", "--no-guide", "--allow-missing-lark-cli"])
     assert rc == 0
     cfg = cfgmod.load(path=home / "config.yaml", apply_env=False)
     assert cfg["shim"]["real_lark_cli"] == ""
@@ -88,7 +88,7 @@ def test_init_missing_lark_cli_strict_fails(monkeypatch, tmp_path):
         raise RuntimeError("lark-cli not found on PATH")
 
     monkeypatch.setattr(m, "_resolve_lark_cli", _raise)
-    rc = m.main(["init", "--no-prompt"])
+    rc = m.main(["init", "--no-prompt", "--no-install-hooks", "--no-guide"])
     assert rc == 2
 
 

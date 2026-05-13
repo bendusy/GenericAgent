@@ -4,10 +4,10 @@
 ``task agent_task_step_info append_task_steps`` 实时写入，user 在
 飞书 app 看到 agent 进展。
 
-约束（lark-cli 1.0.28 + POC 已验证）：
+约束（lark-cli + POC 已验证）：
 - ``task.agent_task_step_info.append_task_steps`` 要求 ``--as bot``
 - bot 必须是 task 创建者；user-created task 写 step 会 10403
-- ``timestamp`` 字段在 1.0.28 序列化有 bug，必须省略（server 自动填）
+- ``timestamp`` 字段在当前版本 序列化有 bug，必须省略（server 自动填）
 """
 from __future__ import annotations
 

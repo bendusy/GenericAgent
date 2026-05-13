@@ -172,7 +172,7 @@ def fetch_tasks_for_user(*, since_us: int = 0, limit_pages: int = 20) -> List[Di
     task.members（让 user 在飞书 "我的待办" inbox 可见），followed-by-me
     过滤反而**拉不到**。
 
-    indexer 不依赖该 API 做增量游标（page_token 在 lark-cli 1.0.28 上语义不
+    indexer 不依赖该 API 做增量游标（page_token 在 lark-cli 上语义不
     稳定）；增量在 client side 做（见 :func:`_filter_incremental`）。
     """
     argv = [
@@ -217,7 +217,7 @@ def _filter_incremental(tasks: List[Dict[str, Any]], since_us: int) -> List[Dict
 def upsert_record(*, base_token: str, table_id: str, fields: Mapping[str, Any]) -> str:
     """task_guid 主键 upsert。返回操作类型 ``"created"`` / ``"updated"`` / ``"skipped"``。
 
-    实现细节（lark-cli 1.0.28 验证）：
+    实现细节（lark-cli 验证）：
     - 探测用 ``+record-search --json '{keyword, search_fields: ["task_guid"]}'``
       （keyword 模糊搜，但 task_guid 是 UUID 唯一，可视作精确）
     - 写用 ``+record-upsert --json '{field_map}'``，可选 ``--record-id`` 决定 update vs create
@@ -318,7 +318,7 @@ def ensure_schema(*, base_token: str, table_id: str) -> Dict[str, str]:
                 continue
             actions[name] = "exists"
             continue
-        # 缺，建（lark-cli 1.0.28: --json '{"name":..,"type":..}' 而非 --name/--type）
+        # 缺，建（lark-cli: --json '{"name":..,"type":..}' 而非 --name/--type）
         try:
             run_json(
                 [

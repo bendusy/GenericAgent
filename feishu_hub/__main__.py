@@ -61,7 +61,7 @@ def _deploy_hook_script(root: Path) -> Path:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    from . import hooks_merge
+    from . import agent_detect, hooks_merge
     root = cfgmod.root_dir()
     _ensure_dirs(root)
 
@@ -93,41 +93,56 @@ def cmd_init(args: argparse.Namespace) -> int:
     path = cfgmod.save(cfg)
     hook = _deploy_hook_script(root)
 
+    # M3.E：auto-detect 三家 AI agent CLI + 自动 hook（除非 --no-install-hooks）
+    skip_list = [s.strip() for s in (args.skip_agent or "").split(",") if s.strip()]
+    detect_results = agent_detect.detect_all(skip=skip_list)
+    installed = agent_detect.installed_only(detect_results)
+
     hook_actions: List[str] = []
-    if args.install_hooks:
-        cc_path = Path(os.path.expanduser(args.cc_settings))
-        codex_path = Path(os.path.expanduser(args.codex_hooks))
-        try:
-            hooks_merge.apply_template(
-                template_name="claude_code_settings.json.tmpl",
-                target_path=cc_path, hook_script=str(hook),
-            )
-            hook_actions.append(f"  merged → {cc_path}")
-        except Exception as e:
-            hook_actions.append(f"  CC merge skipped: {e}")
-        try:
-            hooks_merge.apply_template(
-                template_name="codex_hooks.json.tmpl",
-                target_path=codex_path, hook_script=str(hook),
-            )
-            hook_actions.append(f"  merged → {codex_path}")
-        except Exception as e:
-            hook_actions.append(f"  Codex merge skipped: {e}")
+    if not args.no_install_hooks:
+        for r in installed:
+            try:
+                hooks_merge.apply_template(
+                    template_name=r.spec.template,
+                    target_path=r.spec.hooks_target,
+                    hook_script=str(hook),
+                )
+                hook_actions.append(f"  ✓ {r.spec.name:7} → {r.spec.hooks_target}")
+            except Exception as e:    # noqa: BLE001
+                hook_actions.append(f"  ✗ {r.spec.name:7}: {e}")
 
     print(f"[feishu_hub init] root         = {root}")
     print(f"[feishu_hub init] config       = {path}")
     print(f"[feishu_hub init] real_lark_cli= {cfg['shim']['real_lark_cli'] or '(not set)'}")
     print(f"[feishu_hub init] hook script  = {hook}")
+    print(f"[feishu_hub init] detected agents:")
+    print(agent_detect.describe(detect_results))
     if hook_actions:
-        print(f"[feishu_hub init] hooks install:")
+        print(f"[feishu_hub init] hooks merged:")
         for line in hook_actions:
             print(line)
+    elif args.no_install_hooks:
+        print(f"[feishu_hub init] hooks merge skipped (--no-install-hooks)")
+    else:
+        print(f"[feishu_hub init] hooks merged: (无装的 agent；先装 claude / codex / gemini 再重跑 init)")
     print()
-    if not args.install_hooks:
-        print("下一步（手动，或重跑 init --install-hooks 自动合并）：")
-        print("  1. CC settings.json 加入 Stop hook，调用 ~/.feishu_hub/bin/agent-stop-notify.sh")
-        print("  2. ~/.codex/hooks.json 同上")
-    print("  • export FEISHU_NOTIFY_TO=<open_id>（也可写进 shell rc）")
+
+    # M3.E：装机末尾自动建飞书侧引导任务（产品式 onboarding）
+    if not args.no_guide:
+        try:
+            from . import onboarding
+            bt = cfg.get("bitable") or {}
+            base_url = (
+                f"https://feishu.cn/base/{bt.get('base_token')}?table={bt.get('table_id')}"
+                if bt.get("base_token") and bt.get("table_id") else None
+            )
+            refs = onboarding.create_welcome_tasks(base_url=base_url)
+            if refs:
+                print(f"[feishu_hub init] 引导任务已建到飞书 inbox（{len(refs)} 条），打开飞书"
+                      f"\"我的待办\"即可看到。")
+        except Exception as e:    # noqa: BLE001
+            sys.stderr.write(f"[feishu_hub init] onboarding 跳过：{e}\n")
+
     return 0
 
 
@@ -256,11 +271,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--allow-missing-lark-cli", action="store_true",
                         help="即使本机未装 lark-cli 也不报错（仅用于 CI/测试）")
     p_init.add_argument("--install-hooks", action="store_true",
-                        help="自动 merge Stop hook 到 CC / Codex 配置")
+                        help="[DEPRECATED] 默认就 auto-detect 装 hook；保留兼容旧脚本")
+    p_init.add_argument("--no-install-hooks", action="store_true",
+                        help="跳过 hook 合并（即使检测到 agent）")
+    p_init.add_argument("--skip-agent", default="",
+                        help="逗号分隔的 agent 名（cc/codex/gemini），跳过自动 hook，如 --skip-agent codex,gemini")
+    p_init.add_argument("--no-guide", action="store_true",
+                        help="跳过末尾在飞书侧建引导任务")
     p_init.add_argument("--cc-settings", default="~/.claude/settings.json",
-                        help="Claude Code settings 路径")
+                        help="[DEPRECATED] 现在用 agent_detect.AGENTS 表，不再通过 flag 覆盖")
     p_init.add_argument("--codex-hooks", default="~/.codex/hooks.json",
-                        help="Codex hooks 路径")
+                        help="[DEPRECATED] 同上")
     p_init.set_defaults(func=cmd_init)
 
     p_shim = sub.add_parser("shim", help="以模块形式运行 shim")

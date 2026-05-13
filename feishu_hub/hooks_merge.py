@@ -57,35 +57,46 @@ def target_cmd_tail(target_cmd: str) -> str:
     return target_cmd
 
 
-def merge_stop_hook(
+def _detect_event_key(fragment: Dict[str, Any]) -> str:
+    """从 fragment["hooks"] 取唯一的 event key（Stop / SessionEnd / AfterAgent ...）。"""
+    keys = list((fragment.get("hooks") or {}).keys())
+    if len(keys) != 1:
+        raise ValueError(f"fragment.hooks 必须只有 1 个 event key，实际：{keys}")
+    return keys[0]
+
+
+def merge_event_hook(
     target_path: Path,
     fragment: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """把 ``fragment["hooks"]["Stop"][0]`` 合并到 ``target_path`` 的 Stop 数组。
+    """把 ``fragment["hooks"][<event>][0]`` 合并到 ``target_path`` 的同 event 数组。
+
+    支持任意 hook event（CC Stop / SessionEnd / Gemini AfterAgent / 等）；自动
+    从 fragment 探测 event key，**不**写死 Stop。M3.A 之前叫 ``merge_stop_hook``
+    硬绑 Stop，本期 (M3.E.A) 重命名并扩展。
 
     Returns
     -------
     最终写入的完整对象。
     """
-    if not _frag_valid(fragment):
-        raise ValueError("fragment must contain hooks.Stop[0].hooks[0].command")
-    new_matcher_entry = fragment["hooks"]["Stop"][0]
+    event = _detect_event_key(fragment)
+    new_matcher_entry = fragment["hooks"][event][0]
     new_hook = new_matcher_entry["hooks"][0]
     new_cmd = new_hook["command"]
 
     data = _load_existing(target_path)
     data.setdefault("hooks", {})
-    stop_arr = data["hooks"].setdefault("Stop", [])
+    arr = data["hooks"].setdefault(event, [])
 
     # 找同 matcher 的项；没有就追加；有就 hooks 数组内去重 append
     matcher = new_matcher_entry.get("matcher", "*")
     bucket: Optional[Dict[str, Any]] = None
-    for item in stop_arr:
+    for item in arr:
         if isinstance(item, dict) and item.get("matcher") == matcher:
             bucket = item
             break
     if bucket is None:
-        stop_arr.append(new_matcher_entry)
+        arr.append(new_matcher_entry)
         return data
 
     bucket_hooks = bucket.setdefault("hooks", [])
@@ -99,9 +110,17 @@ def merge_stop_hook(
     return data
 
 
+# 旧名兼容（M3.A 老测试可能引用；本期 deprecated 但不删）
+merge_stop_hook = merge_event_hook
+
+
 def _frag_valid(fragment: Dict[str, Any]) -> bool:
+    """fragment.hooks.<event>[0].hooks[0].command 非空即合法。"""
     try:
-        h = fragment["hooks"]["Stop"][0]["hooks"][0]
+        events = list((fragment.get("hooks") or {}).keys())
+        if not events:
+            return False
+        h = fragment["hooks"][events[0]][0]["hooks"][0]
         return bool(h.get("command"))
     except (KeyError, IndexError, TypeError):
         return False

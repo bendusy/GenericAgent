@@ -19,7 +19,7 @@ from . import config as cfgmod
 #
 # 每条探测**实际执行**带 `--dry-run` 的命令，让 lark-cli 真正解析所有 flag。
 # 这能在 lark-cli 升级时立即发现 flag 改名 / 哑 flag（比单纯 `--help` 文本扫描严格）。
-# 设计：发现 lark-cli 1.0.28 的 `--folder-token` 哑 flag 与 `--format` 不普适都是
+# 设计：发现 lark-cli 的 `--folder-token` 哑 flag 与 `--format` 不普适都是
 # 通过真链路联调发现的（见 memory/lark_cli_quirks.md），smoke 必须能 catch 这类问题。
 PROBES: List[Tuple[str, List[str]]] = [
     ("im_messages_send", [
@@ -88,7 +88,7 @@ def _probe_one(binary: str, argv: List[str], *, timeout: int = 10) -> Dict[str, 
         return {"ok": False, "reason": f"timeout after {timeout}s"}
     text = (proc.stdout or "") + (proc.stderr or "")
     head = text[:500]
-    # --dry-run 必须输出 "=== Dry Run ===" 段（lark-cli 1.0.28+ 行为），
+    # --dry-run 必须输出 "=== Dry Run ===" 段（lark-cli+ 行为），
     # 且退出码 0 才视为 flag 全被接受
     if proc.returncode == 0 and "Dry Run" in text:
         return {"ok": True, "rc": 0, "head": head}

@@ -177,12 +177,12 @@ def docs_create_v2(
 ) -> DocInfo:
     """创建 docx 并移动到目标文件夹（如果 ``parent_token`` 给了）。
 
-    lark-cli 1.0.28 实测：``docs +create --folder-token`` 仅是 hint，**不会**真的把
+    lark-cli 实测：``docs +create --folder-token`` 仅是 hint，**不会**真的把
     文档放进目标文件夹（请求 body 不含 folder 字段，doc 默认落用户根目录）。
     解决：create 之后再调 ``drive +move`` 把 docx 移过去；title 用
     ``docs +update --new-title`` 设置。
     """
-    # 1) 创建（lark-cli 1.0.28 的 --title / --folder-token 被静默忽略，所以这里
+    # 1) 创建（lark-cli 的 --title / --folder-token 被静默忽略，所以这里
     #    只用 content 创建，下面再 move + rename）
     argv = [
         "docs", "+create",
@@ -254,7 +254,7 @@ def docs_update_overwrite(
 ) -> None:
     """``docs +update --mode overwrite --markdown - [--new-title]``（v1 形式）。
 
-    lark-cli 1.0.28 实测：v1 走 MCP update-doc，支持 ``--mode`` + ``--new-title``；
+    lark-cli 实测：v1 走 MCP update-doc，支持 ``--mode`` + ``--new-title``；
     v2 要 ``--command``，参数面有出入。这里固定 v1，更稳。
     """
     argv = [
