@@ -1,10 +1,6 @@
 """nl_router：硬规则 NL → role+title 解析单测。"""
-from pathlib import Path
-
-import pytest
-
 from feishu_hub.base_config import BaseConfig
-from feishu_hub.nl_router import NLParseResult, _score_role, parse
+from feishu_hub.nl_router import _score_role
 
 
 def _cfg_gzh() -> BaseConfig:

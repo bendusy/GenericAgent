@@ -40,5 +40,5 @@ def _score_role(text: str, cfg: BaseConfig) -> Tuple[int, Tuple[str, ...], Tuple
 
 
 def parse(text: str, configs: List[BaseConfig]) -> Optional[NLParseResult]:
-    """Stub for Phase 4."""
-    raise NotImplementedError
+    """Stub — real implementation lands in Phase 4 of the M5.A NL router plan."""
+    raise NotImplementedError("nl_router.parse() not yet implemented (Phase 4 of M5.A plan)")
