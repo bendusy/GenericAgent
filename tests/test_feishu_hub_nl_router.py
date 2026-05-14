@@ -1,6 +1,6 @@
 """nl_router：硬规则 NL → role+title 解析单测。"""
 from feishu_hub.base_config import BaseConfig
-from feishu_hub.nl_router import _score_role
+from feishu_hub.nl_router import _extract_title, _score_role
 
 
 def _cfg_gzh() -> BaseConfig:
@@ -53,3 +53,37 @@ def test_score_role_skips_when_nl_keywords_none() -> None:
         nl_keywords=None,
     )
     assert _score_role("公众号写一篇", cfg) == (0, (), ())
+
+
+def test_extract_title_strips_matched_keywords() -> None:
+    title = _extract_title(
+        text="公众号写一篇 AI 产品设计入门",
+        matched_keywords=("公众号", "写一篇"),
+    )
+    assert title == "AI 产品设计入门"
+
+
+def test_extract_title_strips_leading_particles() -> None:
+    title = _extract_title(
+        text="公众号 帮我 写一篇 AI 产品设计",
+        matched_keywords=("公众号", "写一篇"),
+    )
+    # "帮我" 是首尾助词，应剥掉
+    assert title == "AI 产品设计"
+
+
+def test_extract_title_fallback_to_full_when_too_short() -> None:
+    title = _extract_title(
+        text="公众号写一篇",
+        matched_keywords=("公众号", "写一篇"),
+    )
+    # 剥完只剩空字符串 → fallback 整句
+    assert title == "公众号写一篇"
+
+
+def test_extract_title_trims_whitespace() -> None:
+    title = _extract_title(
+        text="  公众号   写一篇   极简生活   ",
+        matched_keywords=("公众号", "写一篇"),
+    )
+    assert title == "极简生活"
