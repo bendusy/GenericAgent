@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from typing import Callable, List, Optional, Tuple
 
 from feishu_hub.base_config import BaseConfig, resolve_by_role, resolve_by_base_token
-from feishu_hub.lark_cli import base_record_get
+from feishu_hub.lark_cli import base_record_get, base_record_upsert
+from feishu_hub import nl_router
 from feishu_hub.record_writer import (
     append_product,
     cas_acquire_running,
@@ -278,3 +279,66 @@ def _cleanup_after_runner(
         registry.unregister(entry.task_guid)
     except Exception:
         _log.exception("cleanup unregister failed: task=%s", entry.task_guid)
+
+
+def try_handle_nl(event: dict, *, configs: List[BaseConfig],
+                  registry: RunnerRegistry,
+                  reply_fn: Callable[[str], None]) -> bool:
+    """NL → 自动建 Base 行 → 组装 fake event → 调 try_handle 复用 /run 路径。
+
+    Return:
+    - True 表示消费了 event（成功路由 / 已追问 / 已报错）
+    - False 表示没识别出任何 role，应让上层继续 fall-through 到其他 handler
+    """
+    text = _extract_text(event)
+    if not text:
+        return False
+
+    result = nl_router.parse(text, configs)
+    if not result:
+        return False
+
+    if result.confidence < 0.7:
+        reply_fn(
+            f"我理解你想让『{result.role}』做『{result.title}』，对吗？"
+            "回复『是』确认，或告诉我具体要做什么。"
+        )
+        return True
+
+    cfg = resolve_by_role(configs, result.role)
+    if cfg is None:  # paranoia: parse 给出的 role 必在 configs 里
+        return False
+
+    try:
+        record_id = base_record_upsert(
+            base_token=cfg.base_token,
+            table_id=cfg.table_id,
+            fields={
+                "任务标题": result.title,
+                "阶段": result.initial_stage,
+                "运行状态": "idle",
+                "备注": result.raw_text,
+            },
+        )
+    except Exception as e:  # lark-cli 异常 / 字段不存在 / 鉴权失败
+        _log.exception("nl_router upsert failed: role=%s title=%r",
+                       result.role, result.title)
+        reply_fn(f"建行失败：{type(e).__name__}: {e}")
+        return True
+
+    # 组装 fake event：复用原 chat_id/sender 让 reply_fn 仍贴在原 thread
+    msg = _event_message(event)
+    fake_event = {
+        "message_id": msg.get("message_id", ""),
+        "chat_id": msg.get("chat_id", ""),
+        "content": f"/run {result.role} record:{record_id}",
+    }
+    # 把 sender_id / open_id 一并 propagate（如果原 event 有）
+    for k in ("sender_id", "open_id"):
+        if k in msg:
+            fake_event[k] = msg[k]
+
+    consumed = try_handle(fake_event, configs=configs, registry=registry, reply_fn=reply_fn)
+    if not consumed:
+        reply_fn(f"已建行（record_id={record_id}），但 /run 触发失败；请手动 /run {result.role} record:{record_id}")
+    return True
