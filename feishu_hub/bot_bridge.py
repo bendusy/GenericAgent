@@ -129,6 +129,16 @@ def _run_parallel(
     workers: list[threading.Thread] = []
 
     def _worker(event: dict) -> None:
+        # M4.D fix: base path 也 offload 到 worker，避免 _try_base_intent 同步
+        # 阻塞 feeder（runner 跑 N 秒期间 /stop 等后续 event 收不到）。
+        try:
+            if _try_base_intent(event, registry):
+                actions_q.put(None)
+                return
+        except Exception:
+            _log.exception("base_intent worker failed: bot=%s msg=%s",
+                           bot.app_id, event.get("message_id"))
+            # 失败 fall through 到 R5 path
         try:
             a = handle_event(event, bot)
         except Exception:
@@ -143,9 +153,6 @@ def _run_parallel(
                                     max_events=max_events, timeout=timeout):
                 if _is_abort(event, registry):
                     actions_q.put(None)  # 占位防 main loop 提前 break
-                    continue
-                if _try_base_intent(event, registry):
-                    actions_q.put(None)
                     continue
                 t = threading.Thread(target=_worker, args=(event,), daemon=True)
                 t.start()

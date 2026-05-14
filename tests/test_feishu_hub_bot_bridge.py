@@ -300,3 +300,58 @@ def test_run_parallel_calls_base_intent_router_first(monkeypatch):
     assert sorted(base_seen) == ["om_base", "om_other"]
     assert handled == ["om_other"]
     assert [a.source_message_id for a in actions] == ["om_other"]
+
+
+def test_run_parallel_feeder_not_blocked_by_long_base_intent(monkeypatch):
+    """parallel=True：base_intent_router 长跑（runner sleep）期间 feeder
+    必须能继续读后续 event（如 /stop），否则 hitl_router 收不到打断。
+    M4.E e2e 发现 critical bug：原实现把 _try_base_intent 同步放在 feeder。"""
+    import threading
+    import time as _time
+    _reset_base_cache(monkeypatch)
+    from feishu_hub import base_config as _bc, base_intent_router as _bir
+
+    events = [
+        {"message_id": "om_base", "chat_id": "oc_x", "content": "/run X"},
+        {"message_id": "om_followup", "chat_id": "oc_x", "content": "/stop"},
+    ]
+    monkeypatch.setattr(_bc, "load_all", lambda: [object()])
+
+    base_started = threading.Event()
+    base_release = threading.Event()
+    handled = []
+
+    def fake_try_handle(ev, *, configs, registry, reply_fn):
+        if ev["message_id"] == "om_base":
+            base_started.set()
+            # 故意阻塞，模拟 runner sleep 30s
+            base_release.wait(timeout=2.0)
+            return True
+        return False  # om_followup 让 _is_abort 兜（fake handle_event 处理）
+
+    def fake_handle(ev, b):
+        handled.append(ev["message_id"])
+        return _ok_action(source_message_id=ev["message_id"])
+
+    monkeypatch.setattr(bb, "consume_im", lambda **_: iter(events))
+    monkeypatch.setattr(_bir, "try_handle", fake_try_handle)
+    monkeypatch.setattr(bb, "handle_event", fake_handle)
+
+    # 用线程跑 run_bot，主线程等 base_started 后立即检查 om_followup 是否已被 handle
+    actions_iter = bb.run_bot(_bot(), parallel=True)
+    results = []
+    def consume():
+        for a in actions_iter:
+            results.append(a)
+    t = threading.Thread(target=consume, daemon=True)
+    t.start()
+
+    # 等 base 进 sleep
+    assert base_started.wait(timeout=2.0), "base intent worker 没启动"
+    # 关键断言：base 还没完成时，om_followup 应该已经被 feeder 读到 + worker 处理
+    _time.sleep(0.3)  # 给 worker 一点时间
+    assert "om_followup" in handled, \
+        "feeder 被 base 阻塞了：om_followup 在 base 完成前未被 handle_event"
+
+    base_release.set()
+    t.join(timeout=3.0)
