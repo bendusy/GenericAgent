@@ -5,8 +5,7 @@ M3.E：relay_task 已移到 handle_event 内部；本 bridge 测试不再涉及 
 from __future__ import annotations
 
 from typing import List
-
-import pytest
+from unittest.mock import MagicMock
 
 from feishu_hub import bot_bridge as bb
 from feishu_hub import bot_role as br
@@ -355,3 +354,73 @@ def test_run_parallel_feeder_not_blocked_by_long_base_intent(monkeypatch):
 
     base_release.set()
     t.join(timeout=3.0)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: _try_base_intent 二段调度
+
+def test_try_base_intent_run_path_consumes_event_skips_nl(monkeypatch):
+    """显式 /run 协议被 try_handle 消费时，try_handle_nl 不应被调用。"""
+    from feishu_hub import bot_bridge
+
+    monkeypatch.setattr(bot_bridge, "_get_base_configs", lambda: [object()])
+
+    nl_called = [False]
+
+    def fake_try_handle(event, *, configs, registry, reply_fn):
+        return True  # consumed
+
+    def fake_try_handle_nl(event, *, configs, registry, reply_fn):
+        nl_called[0] = True
+        return True
+
+    monkeypatch.setattr(bot_bridge.base_intent_router, "try_handle", fake_try_handle)
+    monkeypatch.setattr(bot_bridge.base_intent_router, "try_handle_nl", fake_try_handle_nl)
+
+    event = {"content": "/run X record:rec1"}
+    registry = MagicMock()
+    consumed = bot_bridge._try_base_intent(event, registry)
+
+    assert consumed is True
+    assert nl_called[0] is False
+
+
+def test_try_base_intent_falls_through_to_nl_when_run_not_consumed(monkeypatch):
+    """try_handle 返回 False 时，二段调度应试 try_handle_nl。"""
+    from feishu_hub import bot_bridge
+
+    monkeypatch.setattr(bot_bridge, "_get_base_configs", lambda: [object()])
+
+    nl_called = [False]
+
+    def fake_try_handle(event, *, configs, registry, reply_fn):
+        return False  # no /run match
+
+    def fake_try_handle_nl(event, *, configs, registry, reply_fn):
+        nl_called[0] = True
+        return True  # NL consumed
+
+    monkeypatch.setattr(bot_bridge.base_intent_router, "try_handle", fake_try_handle)
+    monkeypatch.setattr(bot_bridge.base_intent_router, "try_handle_nl", fake_try_handle_nl)
+
+    event = {"content": "公众号写一篇 AI"}
+    registry = MagicMock()
+    consumed = bot_bridge._try_base_intent(event, registry)
+
+    assert consumed is True
+    assert nl_called[0] is True
+
+
+def test_try_base_intent_returns_false_when_neither_consumes(monkeypatch):
+    """两段都未消费，让 R5 legacy IM path 接管。"""
+    from feishu_hub import bot_bridge
+
+    monkeypatch.setattr(bot_bridge, "_get_base_configs", lambda: [object()])
+    monkeypatch.setattr(bot_bridge.base_intent_router, "try_handle", lambda *a, **kw: False)
+    monkeypatch.setattr(bot_bridge.base_intent_router, "try_handle_nl", lambda *a, **kw: False)
+
+    event = {"content": "天气真好"}
+    registry = MagicMock()
+    consumed = bot_bridge._try_base_intent(event, registry)
+
+    assert consumed is False
