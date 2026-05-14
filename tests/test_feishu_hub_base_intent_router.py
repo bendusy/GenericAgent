@@ -670,6 +670,7 @@ def test_try_handle_nl_low_confidence_asks_user_no_upsert(monkeypatch):
 
 
 def test_try_handle_nl_no_match_returns_false(monkeypatch):
+    """role=null（闲聊） → tried_and_failed=True → 兜底回复 + consumed=True。"""
     from feishu_hub.runner_registry import RunnerRegistry
     cfg = BaseConfig(
         role="公众号-2026", base_token="K6Y", table_id="tbl_gzh",
@@ -685,8 +686,54 @@ def test_try_handle_nl_no_match_returns_false(monkeypatch):
     event = {"content": "天气真好"}
     consumed = try_handle_nl(event, configs=[cfg], registry=registry, reply_fn=replies.append)
 
+    # role=null → tried_and_failed=True → 回复兜底文案 + consumed=True
+    assert consumed is True
+    assert any("没看懂" in r for r in replies)
+
+
+def test_try_handle_nl_no_nl_keywords_returns_false(monkeypatch):
+    """无 nl_keywords candidates → silent fall-through → consumed=False。"""
+    from feishu_hub.runner_registry import RunnerRegistry
+    cfg = BaseConfig(
+        role="公众号-2026", base_token="K6Y", table_id="tbl_gzh",
+        stage_to_bot={"📋 选题": "selector_bot"},
+        nl_keywords=None,
+    )
+    registry = RunnerRegistry()
+    replies: list[str] = []
+    _mock_nl_llm(monkeypatch, '{"role":null}')
+    monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", lambda **kw: "recX")
+    monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", lambda *a, **kw: True)
+
+    event = {"content": "天气真好"}
+    consumed = try_handle_nl(event, configs=[cfg], registry=registry, reply_fn=replies.append)
+
     assert consumed is False
     assert replies == []
+
+
+def test_try_handle_nl_llm_failure_replies_spec_fallback(monkeypatch):
+    """codex Q3: LLM 失败时回复 spec §3 兜底文案，不静默 fall-through。"""
+    from feishu_hub.runner_registry import RunnerRegistry
+    cfg = BaseConfig(
+        role="公众号-2026", base_token="K6Y", table_id="tbl_gzh",
+        stage_to_bot={"📋 选题": "selector_bot"},
+        initial_stage="📋 选题",
+        nl_keywords={"strong": ["公众号", "写一篇"], "weak": []},
+    )
+    registry = RunnerRegistry()
+    replies: list[str] = []
+
+    def fake_caller(prompt: str) -> str:
+        raise RuntimeError("LLM transient error")
+
+    monkeypatch.setattr("feishu_hub.nl_router._get_llm_caller", lambda: fake_caller)
+
+    event = {"content": "公众号写一篇 AI"}
+    consumed = try_handle_nl(event, configs=[cfg], registry=registry, reply_fn=replies.append)
+
+    assert consumed is True
+    assert any("没看懂" in r for r in replies)
 
 
 def test_try_handle_nl_upsert_failure_reports_to_user(monkeypatch):

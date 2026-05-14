@@ -294,9 +294,15 @@ def try_handle_nl(event: dict, *, configs: List[BaseConfig],
     if not text:
         return False
 
-    result = nl_router.parse(text, configs)
-    if not result:
-        return False
+    result, tried_and_failed = nl_router.parse(text, configs)
+    if result is None:
+        if tried_and_failed:
+            reply_fn(
+                "没看懂这个任务。你可以直接说『公众号写一篇 AI 产品设计』，"
+                "或者用 /run 命令。"
+            )
+            return True  # consumed
+        return False  # silent fall-through
 
     if result.confidence < 0.7:
         reply_fn(

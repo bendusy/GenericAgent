@@ -2,7 +2,8 @@
 
 设计：docs/superpowers/specs/2026-05-14-m5-user-first-pivot-design.md §3
 M5.A 升级版：1 次 llmcore 调用替代硬规则（spec §3 原 M5.B 计划前移）。
-LLM 失败 / 无 GA → parse() 返回 None（静默 fall-through，不阻塞主路径）。
+LLM 失败 / 无 GA → parse() 返回 (None, False) 静默 fall-through。
+LLM 试过但失败（call raise / 非 JSON / role=null / 幻觉）→ (None, True) tried_and_failed。
 复用 feishu_hub.llm_summary.make_ga_summarizer（GA llmcore wrapper）。
 """
 from __future__ import annotations
@@ -11,7 +12,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from feishu_hub.base_config import BaseConfig
 
@@ -33,15 +34,23 @@ _PROMPT_TEMPLATE = """你是飞书机器人意图分类器。根据用户消息�
 可选 role：
 {roles}
 
-用户消息：「{text}」
-
-规则：
-- 否定句（"不要..."/"别..."/"没想..."）一律返回 role=null
-- 闲聊（如"天气真好"）返回 role=null
+判断规则：
+- 用户拒绝任务（"我不想..."/"别给我..."/"没想做..."）→ role=null
+- 闲聊无关内容（"天气真好"/"在吗"）→ role=null
 - 命中 role 时提取简洁标题：去掉口语化前缀（"帮我"/"请"/"想"等），保留核心动作
+- 任务约束（"公众号不要写 AI"/"小红书别用 emoji"）= 仍命中对应 role，title 含约束
+- 支持中文、英文、繁简、emoji；忽略大小写
 - confidence：强匹配 0.85+，模糊 0.5-0.7，不确定 <0.5
 
-只返回 JSON（无 markdown 包裹，无多余文字）：
+示例：
+- "我不想关注公众号" → role=null（拒绝）
+- "公众号不要写 AI 主题" → role="公众号-2026", title="不写 AI 主题"（任务约束）
+- "天气真好" → role=null（闲聊）
+- "Write an article about React on 公众号" → role="公众号-2026", title="Write an article about React"
+
+用户消息：「{text}」
+
+只返回 JSON（无 markdown，无多余文字）：
 {{"role": "<role 名或 null>", "title": "<标题>", "confidence": <0-1 数字>, "why": "<一句中文理由>"}}"""
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -70,7 +79,13 @@ def _build_prompt(text: str, candidates: List[BaseConfig]) -> str:
     for cfg in candidates:
         kw = cfg.nl_keywords or {}
         strong = kw.get("strong", [])
-        hint = f"（提示词：{', '.join(strong)}）" if strong else ""
+        weak = kw.get("weak", [])
+        parts = []
+        if strong:
+            parts.append(f"强提示：{', '.join(strong)}")
+        if weak:
+            parts.append(f"弱提示：{', '.join(weak)}")
+        hint = f"（{' / '.join(parts)}）" if parts else ""
         role_lines.append(f"- {cfg.role}{hint}")
     return _PROMPT_TEMPLATE.format(roles="\n".join(role_lines), text=text.strip())
 
@@ -88,46 +103,48 @@ def _parse_llm_json(raw: str) -> Optional[dict]:
     return obj if isinstance(obj, dict) else None
 
 
-def parse(text: str, configs: List[BaseConfig]) -> Optional[NLParseResult]:
+def parse(text: str, configs: List[BaseConfig]) -> Tuple[Optional[NLParseResult], bool]:
     """LLM-based NL parser.
 
-    返回 None 的情况：
-    - text 为空
-    - 没有 candidate role（配置无 nl_keywords）
-    - LLM 不可用 / 抛异常 / 返回非 JSON
-    - LLM 返回 role=null（否定 / 闲聊）
-    - LLM 幻觉了一个不在 candidates 里的 role
-    - 选出的 role 既无 initial_stage 也无 stage_to_bot fallback
+    Returns:
+        (result, tried_and_failed) where:
+        - (NLParseResult, False)  — 成功
+        - (None, False)           — silent fall-through（空 text / 无 candidates / 无 LLM）
+        - (None, True)            — LLM 试过但失败（call raise / 非 JSON / role=null / 幻觉）
+                                    → 调用方应回复 spec §3 兜底文案
     """
     if not text or not text.strip():
-        return None
+        return None, False
 
     candidates = [c for c in configs if c.nl_keywords]
     if not candidates:
-        return None
+        return None, False
 
     caller = _get_llm_caller()
     if caller is None:
-        return None
+        return None, False
 
     try:
         raw = caller(_build_prompt(text, candidates))
     except Exception:
         _log.exception("nl_router LLM call failed: text=%r", text[:100])
-        return None
+        global _llm_caller
+        _llm_caller = None  # invalidate cache so next call re-resolves
+        return None, True
 
     data = _parse_llm_json(raw)
     if not data:
-        return None
+        return None, True
 
     role = data.get("role")
     if not isinstance(role, str) or not role.strip():
-        return None
+        # role=null（否定 / 闲聊）或解析失败 → tried but failed
+        return None, True
 
     cfg = next((c for c in candidates if c.role == role), None)
     if cfg is None:
         _log.warning("nl_router: LLM hallucinated role %r not in candidates", role)
-        return None
+        return None, True
 
     try:
         confidence = float(data.get("confidence", 0.5))
@@ -145,7 +162,7 @@ def parse(text: str, configs: List[BaseConfig]) -> Optional[NLParseResult]:
         if cfg.stage_to_bot:
             initial_stage = next(iter(cfg.stage_to_bot.keys()))
         else:
-            return None
+            return None, True
 
     raw_why = data.get("why", "")
     why = raw_why if isinstance(raw_why, str) else ""
@@ -157,4 +174,4 @@ def parse(text: str, configs: List[BaseConfig]) -> Optional[NLParseResult]:
         confidence=confidence,
         raw_text=text,
         why=why,
-    )
+    ), False
