@@ -3,6 +3,7 @@ import pytest
 from feishu_hub.record_writer import (
     append_product,
     cas_acquire_running,
+    mirror_doc_urls,
     set_run_state,
 )
 
@@ -150,3 +151,82 @@ def test_cas_acquire_running_detects_conflict():
     assert marker is None
     assert status == "concurrent_conflict"
     assert len(upserts) == 1
+
+
+# ---- M4.D-3.1: mirror_doc_urls ----
+
+def _patch_upsert(capture):
+    def fake_upsert(*, base_token, table_id, record_id, fields, **kw):
+        capture.append({"base_token": base_token, "table_id": table_id,
+                        "record_id": record_id, "fields": fields})
+        return record_id
+    return patch("feishu_hub.record_writer.base_record_upsert", side_effect=fake_upsert)
+
+
+def test_mirror_doc_urls_extracts_docx_url():
+    captured = []
+    with _patch_upsert(captured):
+        n = mirror_doc_urls(
+            record_id="rec1", target_field="关联文档",
+            stdout="see https://feishu.cn/docx/Abc123 done",
+            base_token="bt", table_id="tbl",
+        )
+    assert n == 1
+    assert len(captured) == 1
+    assert captured[0]["fields"] == {"关联文档": "https://feishu.cn/docx/Abc123"}
+    assert captured[0]["record_id"] == "rec1"
+
+
+def test_mirror_doc_urls_extracts_multiple_types():
+    captured = []
+    stdout = (
+        "doc: https://feishu.cn/docx/Abc123\n"
+        "sheet: https://feishu.cn/sheets/Sht456\n"
+        "base: https://feishu.cn/base/Bas789\n"
+    )
+    with _patch_upsert(captured):
+        n = mirror_doc_urls(
+            record_id="rec1", target_field="关联文档", stdout=stdout,
+            base_token="bt", table_id="tbl",
+        )
+    assert n == 3
+    val = captured[0]["fields"]["关联文档"]
+    assert "https://feishu.cn/docx/Abc123" in val
+    assert "https://feishu.cn/sheets/Sht456" in val
+    assert "https://feishu.cn/base/Bas789" in val
+    assert val.count("\n") == 2
+
+
+def test_mirror_doc_urls_dedupes_preserving_order():
+    captured = []
+    stdout = ("https://feishu.cn/docx/Abc123 ... again "
+              "https://feishu.cn/docx/Abc123")
+    with _patch_upsert(captured):
+        n = mirror_doc_urls(
+            record_id="rec1", target_field="关联文档", stdout=stdout,
+            base_token="bt", table_id="tbl",
+        )
+    assert n == 1
+    assert captured[0]["fields"]["关联文档"] == "https://feishu.cn/docx/Abc123"
+
+
+def test_mirror_doc_urls_no_urls_returns_zero_and_no_upsert():
+    captured = []
+    with _patch_upsert(captured):
+        n = mirror_doc_urls(
+            record_id="rec1", target_field="关联文档", stdout="no urls here",
+            base_token="bt", table_id="tbl",
+        )
+    assert n == 0
+    assert captured == []
+
+
+def test_mirror_doc_urls_handles_empty_stdout():
+    captured = []
+    with _patch_upsert(captured):
+        n = mirror_doc_urls(
+            record_id="rec1", target_field="关联文档", stdout="",
+            base_token="bt", table_id="tbl",
+        )
+    assert n == 0
+    assert captured == []

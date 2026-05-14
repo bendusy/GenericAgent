@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import re
 import socket
 import time
 import uuid
@@ -13,6 +14,11 @@ from datetime import datetime, timezone
 from typing import Literal, Optional, Tuple
 
 from feishu_hub.lark_cli import base_record_get, base_record_upsert
+
+# 飞书云文档 URL 正则：docx / sheets / base / wiki / minutes
+_DOC_URL_RE = re.compile(
+    r"https?://[\w.-]+/(?:docx|sheets|base|wiki|minutes)/[\w-]+"
+)
 
 RunState = Literal["idle", "running", "done", "aborted", "failed"]
 _VALID_STATES = {"idle", "running", "done", "aborted", "failed"}
@@ -70,3 +76,24 @@ def cas_acquire_running(*, record_id: str, base_token: str, table_id: str,
     if r1.get(MARKER_FIELD) != marker:
         return None, "concurrent_conflict"
     return marker, "ok"
+
+
+def mirror_doc_urls(*, record_id: str, target_field: str, stdout: str,
+                     base_token: str, table_id: str) -> int:
+    """从 stdout 抽飞书 doc URL 写到 target_field。
+
+    Returns 写入的 URL 数量；0 表示无 URL（不调 upsert）。
+    覆盖式写入（不 merge 旧值）；多 URL 用 \\n 拼接。
+    """
+    urls = _DOC_URL_RE.findall(stdout or "")
+    if not urls:
+        return 0
+    seen = set()
+    uniq = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            uniq.append(u)
+    base_record_upsert(base_token=base_token, table_id=table_id,
+                       record_id=record_id, fields={target_field: "\n".join(uniq)})
+    return len(uniq)
