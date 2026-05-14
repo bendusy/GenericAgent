@@ -223,3 +223,30 @@ def test_dispatch_abort_path_unchanged(registry, monkeypatch):
     assert decision.reason == "/stop"
     assert registry.read_abort_sentinel("t-oc_x") == "/stop"
     assert registry.read_adjust_sentinel("t-oc_x") is None
+
+
+def test_dispatch_skips_when_pid_zero(registry, monkeypatch):
+    """防御性回归：pid<=0 时不能触发 os.kill(0,...)，否则杀整个进程组（含 daemon）。
+
+    M4.E e2e 暴露：try_handle 早 register pid=0 → /stop 在 _on_pid 之前到 →
+    hitl_router 拿 pid=0 → os.kill(0, SIGTERM) 杀整个 process group → daemon 死。
+    现已两层防御：(1) try_handle 不再早 register；(2) hitl_router pid<=0 直接 skip。
+    """
+    killed = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    # entry with pid=0 (registered before on_pid fired)
+    registry.register(_entry(chat_id="oc_x", pid=0))
+    decision = dispatch(_envelope(content="/stop"), registry=registry)
+    assert decision is None
+    assert killed == []  # 没动 os.kill —— 没有 pid=0 group 灾难
+    # 也没写 sentinel（runner 还没真起来，写 sentinel 没意义）
+    assert registry.read_abort_sentinel("t-oc_x") is None
+
+
+def test_dispatch_skips_when_pid_negative(registry, monkeypatch):
+    """同样防御 -1 等任何 invalid pid。"""
+    killed = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    registry.register(_entry(chat_id="oc_x", pid=-1))
+    assert dispatch(_envelope(content="/stop"), registry=registry) is None
+    assert killed == []

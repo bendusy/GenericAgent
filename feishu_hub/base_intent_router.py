@@ -183,25 +183,22 @@ def try_handle(event: dict, *, configs: List[BaseConfig],
     msg = _event_message(event)
     chat_id = msg.get("chat_id", "")
     msg_id = msg.get("message_id", "")
-    entry = RunnerEntry(
+    # 不早 register（pid=0 时 hitl_router 拿到会 os.kill(0,SIGTERM) 杀进程组）。
+    # 跟 R5 bot_runner.handle_event 一致：仅在 _on_pid 里 register 真 pid。
+    # 副作用：cas 期间（~5s）+ Popen 启动前的 /stop 不会命中——可接受，
+    # runner 启动后用户重发即可（hitl_router 加了 pid<=0 防御兜底）。
+    entry_template = dict(
         task_guid=f"base-{record_id}",
         task_url=f"https://feishu.cn/base/{base_token}?table={table_id}&record={record_id}",
-        runner_pid=0, bot_app_id="cli_local", chat_id=chat_id,
+        bot_app_id="cli_local", chat_id=chat_id,
         source_message_id=msg_id,
         started_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         record_id=record_id, base_token=base_token, table_id=table_id,
     )
-    registry.register(entry)
+    entry = RunnerEntry(runner_pid=0, **entry_template)  # 占位（cleanup 用其 task_guid）
 
     def _on_pid(pid: int) -> None:
-        # RunnerEntry is frozen — re-register with updated pid.
-        updated = RunnerEntry(
-            task_guid=entry.task_guid, task_url=entry.task_url,
-            runner_pid=pid, bot_app_id=entry.bot_app_id, chat_id=entry.chat_id,
-            source_message_id=entry.source_message_id, started_at=entry.started_at,
-            record_id=entry.record_id, base_token=entry.base_token, table_id=entry.table_id,
-        )
-        registry.register(updated)
+        registry.register(RunnerEntry(runner_pid=pid, **entry_template))
 
     result = None
     try:

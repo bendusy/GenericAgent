@@ -121,6 +121,13 @@ def dispatch(
     entry = registry.lookup_by_chat_id(chat_id)
     if entry is None:
         return None
+    if entry.runner_pid <= 0:
+        # 防御：pid<=0 时 os.kill 会杀整个 process group（含 daemon）
+        # 通常出现在 register 早于 on_pid 的窗口；忽略此次 abort，runner
+        # 启动后用户重发即可
+        _log.warning("hitl_router: skip abort (pid=%s not ready) chat=%s task=%s",
+                     entry.runner_pid, chat_id, entry.task_guid)
+        return None
     registry.write_abort_sentinel(entry.task_guid, kw)
     try:
         os.kill(entry.runner_pid, signal.SIGTERM)
