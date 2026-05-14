@@ -12,7 +12,12 @@ from typing import Callable, List, Optional, Tuple
 
 from feishu_hub.base_config import BaseConfig, resolve_by_role, resolve_by_base_token
 from feishu_hub.lark_cli import base_record_get
-from feishu_hub.record_writer import append_product, cas_acquire_running, set_run_state
+from feishu_hub.record_writer import (
+    append_product,
+    cas_acquire_running,
+    mirror_doc_urls,
+    set_run_state,
+)
 from feishu_hub.runner_registry import RunnerEntry, RunnerRegistry
 
 _log = logging.getLogger(__name__)
@@ -208,13 +213,14 @@ def try_handle(event: dict, *, configs: List[BaseConfig],
         reply_fn(f"runner 启动/执行异常，已回滚 (record={record_id})")
     finally:
         _cleanup_after_runner(entry=entry, bot=bot, result=result,
-                              registry=registry, reply_fn=reply_fn)
+                              registry=registry, reply_fn=reply_fn, cfg=cfg)
     return True
 
 
 def _cleanup_after_runner(
     *, entry: RunnerEntry, bot: str, result: object,
     registry: RunnerRegistry, reply_fn: Callable[[str], None],
+    cfg: Optional[BaseConfig] = None,
 ) -> None:
     """Write final state + product tail + unregister; never raises.
 
@@ -247,6 +253,23 @@ def _cleanup_after_runner(
                       base_token=base_token, table_id=table_id)
     except Exception:
         _log.exception("cleanup set_run_state failed: record=%s", record_id)
+
+    if (state == "done" and cfg is not None
+            and result is not None and not getattr(result, "aborted", False)
+            and getattr(result, "exit_code", 0) == 0):
+        target = cfg.output_mirror.get(bot)
+        if target:
+            try:
+                stdout = getattr(result, "stdout", "") or ""
+                n = mirror_doc_urls(
+                    record_id=record_id, target_field=target, stdout=stdout,
+                    base_token=base_token, table_id=table_id,
+                )
+                if n:
+                    _log.info("mirror_doc_urls: record=%s field=%s n=%d",
+                              record_id, target, n)
+            except Exception:
+                _log.exception("mirror_doc_urls failed: record=%s", record_id)
 
     try:
         append_product(record_id=record_id, text=tail,

@@ -442,3 +442,141 @@ def test_cleanup_swallows_set_run_state_errors(monkeypatch, tmp_path):
     )
     # unregister still ran despite set_run_state failure
     assert registry.lookup_by_record_id("recABC") is None
+
+
+# ---- M4.D-3.2: output_mirror wiring ----
+
+def _cfg_with_mirror(mapping):
+    return BaseConfig(
+        role="公众号-2026", base_token="K6abc", table_id="tblXYZ",
+        stage_to_bot={"📋 选题": "selector_bot"},
+        output_mirror=mapping,
+    )
+
+
+def _cleanup_entry():
+    from feishu_hub.runner_registry import RunnerEntry
+    return RunnerEntry(
+        task_guid="base-recABC", task_url="x",
+        runner_pid=0, bot_app_id="cli_local", chat_id="oc",
+        source_message_id="om", started_at="t",
+        record_id="recABC", base_token="K6abc", table_id="tblXYZ",
+    )
+
+
+def test_cleanup_invokes_mirror_on_done_with_url_in_stdout(monkeypatch):
+    from feishu_hub.runner_registry import RunnerRegistry
+    monkeypatch.setattr(bir, "set_run_state", lambda **kw: None)
+    monkeypatch.setattr(bir, "append_product", lambda **kw: None)
+
+    calls = []
+
+    def fake_mirror(**kw):
+        calls.append(kw)
+        return 1
+    monkeypatch.setattr(bir, "mirror_doc_urls", fake_mirror)
+
+    cfg = _cfg_with_mirror({"drafter_bot": "关联文档"})
+    registry = RunnerRegistry()
+    entry = _cleanup_entry()
+    registry.register(entry)
+    bir._cleanup_after_runner(
+        entry=entry, bot="drafter_bot",
+        result=_FakeResult(exit_code=0, stdout="see https://feishu.cn/docx/Abc",
+                           stdout_head="see https://feishu.cn/docx/Abc"),
+        registry=registry, reply_fn=lambda _m: None, cfg=cfg,
+    )
+    assert len(calls) == 1
+    assert calls[0]["target_field"] == "关联文档"
+    assert calls[0]["record_id"] == "recABC"
+    assert "https://feishu.cn/docx/Abc" in calls[0]["stdout"]
+
+
+def test_cleanup_skips_mirror_when_no_output_mirror_for_bot(monkeypatch):
+    from feishu_hub.runner_registry import RunnerRegistry
+    monkeypatch.setattr(bir, "set_run_state", lambda **kw: None)
+    monkeypatch.setattr(bir, "append_product", lambda **kw: None)
+    calls = []
+    monkeypatch.setattr(bir, "mirror_doc_urls",
+                        lambda **kw: calls.append(kw) or 0)
+    cfg = _cfg_with_mirror({})
+    registry = RunnerRegistry()
+    entry = _cleanup_entry()
+    registry.register(entry)
+    bir._cleanup_after_runner(
+        entry=entry, bot="drafter_bot",
+        result=_FakeResult(exit_code=0, stdout="https://feishu.cn/docx/X",
+                           stdout_head="x"),
+        registry=registry, reply_fn=lambda _m: None, cfg=cfg,
+    )
+    assert calls == []
+
+
+def test_cleanup_skips_mirror_on_failed_state(monkeypatch):
+    from feishu_hub.runner_registry import RunnerRegistry
+    monkeypatch.setattr(bir, "set_run_state", lambda **kw: None)
+    monkeypatch.setattr(bir, "append_product", lambda **kw: None)
+    calls = []
+    monkeypatch.setattr(bir, "mirror_doc_urls",
+                        lambda **kw: calls.append(kw) or 0)
+    cfg = _cfg_with_mirror({"drafter_bot": "关联文档"})
+    registry = RunnerRegistry()
+    entry = _cleanup_entry()
+    registry.register(entry)
+    bir._cleanup_after_runner(
+        entry=entry, bot="drafter_bot",
+        result=_FakeResult(exit_code=1, stdout="https://feishu.cn/docx/X",
+                           stderr="err", stderr_head="err"),
+        registry=registry, reply_fn=lambda _m: None, cfg=cfg,
+    )
+    assert calls == []
+
+
+def test_cleanup_skips_mirror_on_aborted(monkeypatch):
+    from feishu_hub.runner_registry import RunnerRegistry
+    monkeypatch.setattr(bir, "set_run_state", lambda **kw: None)
+    monkeypatch.setattr(bir, "append_product", lambda **kw: None)
+    calls = []
+    monkeypatch.setattr(bir, "mirror_doc_urls",
+                        lambda **kw: calls.append(kw) or 0)
+    cfg = _cfg_with_mirror({"drafter_bot": "关联文档"})
+    registry = RunnerRegistry()
+    entry = _cleanup_entry()
+    registry.register(entry)
+    bir._cleanup_after_runner(
+        entry=entry, bot="drafter_bot",
+        result=_FakeResult(aborted=True, abort_reason="user /stop",
+                           stdout="https://feishu.cn/docx/X"),
+        registry=registry, reply_fn=lambda _m: None, cfg=cfg,
+    )
+    assert calls == []
+
+
+def test_cleanup_swallows_mirror_exception(monkeypatch):
+    from feishu_hub.runner_registry import RunnerRegistry
+    state_calls = []
+    product_calls = []
+    monkeypatch.setattr(bir, "set_run_state",
+                        lambda **kw: state_calls.append(kw))
+    monkeypatch.setattr(bir, "append_product",
+                        lambda **kw: product_calls.append(kw))
+
+    def boom(**kw):
+        raise RuntimeError("mirror boom")
+    monkeypatch.setattr(bir, "mirror_doc_urls", boom)
+
+    cfg = _cfg_with_mirror({"drafter_bot": "关联文档"})
+    registry = RunnerRegistry()
+    entry = _cleanup_entry()
+    registry.register(entry)
+    # Must not raise
+    bir._cleanup_after_runner(
+        entry=entry, bot="drafter_bot",
+        result=_FakeResult(exit_code=0, stdout="https://feishu.cn/docx/X",
+                           stdout_head="x"),
+        registry=registry, reply_fn=lambda _m: None, cfg=cfg,
+    )
+    # state + product + unregister all ran despite mirror failure
+    assert any(c["state"] == "done" for c in state_calls)
+    assert len(product_calls) == 1
+    assert registry.lookup_by_record_id("recABC") is None
