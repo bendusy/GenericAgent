@@ -104,14 +104,14 @@ def test_make_ga_summarizer_returns_none_when_llmcore_absent(monkeypatch):
 
 def test_wrap_client_handles_string_return():
     class C:
-        def ask(self, p): return "summary text"
+        def chat(self, messages): return "summary text"
     fn = ls._wrap_client(C())
     assert fn("x") == "summary text"
 
 
 def test_wrap_client_handles_generator_return():
     class C:
-        def ask(self, p):
+        def chat(self, messages):
             yield "a"; yield "b"
     fn = ls._wrap_client(C())
     assert fn("x") == "ab"
@@ -217,7 +217,7 @@ def test_resolve_summarizer_auto_falls_back_to_ga(monkeypatch):
 
 def test_wrap_client_handles_exception():
     class C:
-        def ask(self, p): raise RuntimeError("nope")
+        def chat(self, messages): raise RuntimeError("nope")
     fn = ls._wrap_client(C())
     out = fn("x")
     assert "llm error" in out

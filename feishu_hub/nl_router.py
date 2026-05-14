@@ -58,7 +58,10 @@ _llm_caller: Optional[Callable[[str], str]] = None
 
 
 def _get_llm_caller() -> Optional[Callable[[str], str]]:
-    """复用 GA llmcore 客户端；GA 不可用返回 None。"""
+    """复用 GA llmcore 客户端（通过 llm_summary.make_ga_summarizer 保持 layering）。
+
+    GA 不可用返回 None。Cache 命中即复用；调用方负责在异常后清 cache（见 parse() 异常路径）。
+    """
     global _llm_caller
     if _llm_caller is not None:
         return _llm_caller
@@ -67,7 +70,10 @@ def _get_llm_caller() -> Optional[Callable[[str], str]]:
     except Exception:
         _log.debug("nl_router: llm_summary import failed", exc_info=True)
         return None
-    _llm_caller = make_ga_summarizer()
+    caller = make_ga_summarizer()
+    if caller is None:
+        return None
+    _llm_caller = caller
     return _llm_caller
 
 

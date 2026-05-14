@@ -162,13 +162,16 @@ def _candidate_session_keys(prefer: Optional[str]) -> List[str]:
 
 
 def _wrap_client(client: Any) -> Summarizer:
-    """把 GA client 包装成 ``Summarizer`` 接口。"""
+    """把 GA client 包装成 ``Summarizer`` 接口。
+
+    llmcore Client 使用 client.chat([messages]) 而非旧的 client.ask(prompt)；
+    chat() 可能返回 str 或 generator，两者都处理。
+    """
     def _call(prompt: str) -> str:
         try:
-            ret = client.ask(prompt)
+            ret = client.chat([{"role": "user", "content": prompt}])
         except Exception as e:
             return trivial_summarizer(prompt) + f"\n<!-- llm error: {e} -->"
-        # ask() 可能返回 str（非 stream）或 generator
         if isinstance(ret, str):
             return ret
         try:
