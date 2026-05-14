@@ -1,5 +1,6 @@
 """nl_router LLM 版单测：mock _get_llm_caller 返回 canned JSON。"""
 import pytest
+from typing import Callable, Optional
 
 from feishu_hub.base_config import BaseConfig
 from feishu_hub.nl_router import parse
@@ -247,22 +248,97 @@ def test_parse_returns_silent_when_no_candidates(monkeypatch) -> None:
 
 
 def test_parse_invalidates_cache_after_llm_exception(monkeypatch) -> None:
-    """codex Q5: LLM 调用异常后应清 _llm_caller cache，下次重新 resolve。"""
+    """codex Q5: 必须先 prime cache，再让 caller raise，验证 cache 被清。"""
     import feishu_hub.nl_router as nr
 
-    # 重置全局 cache
-    nr._llm_caller = None
+    call_count = [0]
 
-    # 第 1 次 resolve → 返回 always-raises caller
     def raising_caller(prompt: str) -> str:
+        call_count[0] += 1
         raise RuntimeError("transient network error")
 
-    monkeypatch.setattr("feishu_hub.nl_router._get_llm_caller", lambda: raising_caller)
+    # 预置 cached caller —— 关键：模拟"client 之前 resolve 成功，现在调用失败"
+    nr._llm_caller = raising_caller
 
-    # 第 1 次调用：LLM raises → (None, True)
-    res1, failed1 = parse("公众号写一篇 X", [_cfg_gzh()])
-    assert res1 is None
-    assert failed1 is True
+    # _get_llm_caller cache 命中路径：`if _llm_caller is not None: return _llm_caller`
+    # 不需要 monkeypatch _get_llm_caller，cache 命中即走 raising_caller
 
-    # cache 应被清除：_llm_caller = None
-    assert nr._llm_caller is None
+    res, tried_and_failed = parse("公众号写一篇 X", [_cfg_gzh()])
+
+    assert res is None
+    assert tried_and_failed is True
+    assert call_count[0] == 1  # caller 真被调过 1 次
+    assert nr._llm_caller is None  # 关键断言：异常后 cache 被清
+
+
+def test_parse_re_resolves_caller_after_cache_invalidation(monkeypatch) -> None:
+    """补充：cache 清除后下次调用应重新 resolve（不卡在 stale state）。"""
+    import feishu_hub.nl_router as nr
+
+    nr._llm_caller = None
+
+    versions: list[str] = []
+
+    def make_caller(version: str) -> Callable[[str], str]:
+        def _c(prompt: str) -> str:
+            return '{"role":"公众号-2026","title":"X","confidence":0.9}'
+        return _c
+
+    def fake_get_llm_caller() -> Optional[Callable[[str], str]]:
+        if nr._llm_caller is not None:
+            return nr._llm_caller
+        v = f"v{len(versions) + 1}"
+        versions.append(v)
+        nr._llm_caller = make_caller(v)
+        return nr._llm_caller
+
+    monkeypatch.setattr("feishu_hub.nl_router._get_llm_caller", fake_get_llm_caller)
+
+    # 1st parse: resolve 一次，创建 v1
+    parse("公众号写一篇 X", [_cfg_gzh()])
+    assert versions == ["v1"]
+
+    # 2nd parse: cache hit，不再 resolve
+    parse("公众号写一篇 Y", [_cfg_gzh()])
+    assert versions == ["v1"]
+
+    # 模拟 LLM 故障后清 cache
+    nr._llm_caller = None
+
+    # 3rd parse: re-resolve，创建 v2
+    parse("公众号写一篇 Z", [_cfg_gzh()])
+    assert versions == ["v1", "v2"]
+
+
+def test_parse_handles_multi_json_takes_first(monkeypatch) -> None:
+    """codex 新发现风险：贪婪正则曾会吞两个对象，现改 balanced 扫描取第一个。"""
+    _mock_llm(
+        monkeypatch,
+        '{"role":"公众号-2026","title":"A","confidence":0.9}\n{"role":"Coder","title":"B"}',
+    )
+    res, _ = parse("公众号写一篇 X", [_cfg_gzh(), _cfg_coder()])
+    assert res is not None
+    assert res.role == "公众号-2026"
+    assert res.title == "A"
+
+
+def test_parse_handles_nested_object_in_json(monkeypatch) -> None:
+    """嵌套对象（如 why 字段含 dict）应正确括号匹配，不在第一个 } 处截断。"""
+    _mock_llm(
+        monkeypatch,
+        '{"role":"公众号-2026","title":"X","confidence":0.9,"meta":{"nested":{"k":1}}}',
+    )
+    res, _ = parse("公众号写一篇 X", [_cfg_gzh()])
+    assert res is not None
+    assert res.role == "公众号-2026"
+
+
+def test_parse_handles_json_with_brace_in_string(monkeypatch) -> None:
+    """JSON 字符串值含 `{` `}` 时括号扫描不能误判 depth。"""
+    _mock_llm(
+        monkeypatch,
+        '{"role":"公众号-2026","title":"题目{含括号}","confidence":0.9}',
+    )
+    res, _ = parse("公众号写一篇 X", [_cfg_gzh()])
+    assert res is not None
+    assert res.title == "题目{含括号}"

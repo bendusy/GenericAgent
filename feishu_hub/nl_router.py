@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 
@@ -53,8 +52,6 @@ _PROMPT_TEMPLATE = """你是飞书机器人意图分类器。根据用户消息�
 只返回 JSON（无 markdown，无多余文字）：
 {{"role": "<role 名或 null>", "title": "<标题>", "confidence": <0-1 数字>, "why": "<一句中文理由>"}}"""
 
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
-
 # Module-level cache：惰性 resolve LLM caller (prompt → str)。
 # 显式声明类型让 monkeypatch 测试可替换。
 _llm_caller: Optional[Callable[[str], str]] = None
@@ -91,16 +88,60 @@ def _build_prompt(text: str, candidates: List[BaseConfig]) -> str:
 
 
 def _parse_llm_json(raw: str) -> Optional[dict]:
+    """Extract first balanced JSON object from raw LLM output.
+
+    处理 LLM 常见返回形态：
+    - 纯 JSON：`{"role": ...}`
+    - markdown 包装：```json\n{...}\n```
+    - 前导话术：`Sure, here it is: {"role": ...}`
+    - 多个对象：取**第一个**完整 balanced {...}
+
+    用括号匹配遍历，避免贪婪正则 `{.*}` 在多对象时取错。
+    """
     if not raw or not raw.strip():
         return None
-    m = _JSON_RE.search(raw)
-    if not m:
+
+    # 快路径：raw 本身就是 JSON
+    stripped = raw.strip()
+    if stripped.startswith("{"):
+        try:
+            obj = json.loads(stripped)
+            return obj if isinstance(obj, dict) else None
+        except json.JSONDecodeError:
+            pass  # 继续走括号遍历
+
+    # 慢路径：扫描第一个 balanced {...}
+    start = raw.find("{")
+    if start < 0:
         return None
-    try:
-        obj = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-    return obj if isinstance(obj, dict) else None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = raw[start : i + 1]
+                try:
+                    obj = json.loads(candidate)
+                    return obj if isinstance(obj, dict) else None
+                except json.JSONDecodeError:
+                    return None
+    return None
 
 
 def parse(text: str, configs: List[BaseConfig]) -> Tuple[Optional[NLParseResult], bool]:
