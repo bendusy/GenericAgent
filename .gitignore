@@ -125,3 +125,6 @@ reflect/*
 # Runtime data accidentally tracked in 92c24c5; should never be in git
 assets/agent_bbs.db
 assets/boards.json
+
+# Private design docs / plans / specs / notes — 本地保留，不公开（含 base_token / chat_id / app_id 等资源 ID）
+/docs/
