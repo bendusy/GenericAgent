@@ -9,21 +9,51 @@ from unittest.mock import patch
 
 class TestBaseRecordGet:
     @patch("feishu_hub.lark_cli.run_json")
-    def test_parses_fields(self, run_json):
+    def test_parses_columnar_response(self, run_json):
+        """实测响应（lark-cli 1.0.29 + 公众号-2026, 2026-05-14）是列式：
+        data.data[0] = 行值数组；data.fields = 平行列名。"""
         run_json.return_value = {
-            "code": 0,
-            "data": {"record": {"fields": {"任务标题": "hi", "阶段": ["📋 选题"]}}},
+            "ok": True,
+            "data": {
+                "data": [["hi", ["📋 选题"], ["cc"], "x"]],
+                "fields": ["任务标题", "阶段", "负责 AI", "备注"],
+                "field_id_list": ["fldA", "fldB", "fldC", "fldD"],
+                "record_id_list": ["rec1"],
+                "has_more": False,
+            },
         }
         from feishu_hub.lark_cli import base_record_get
 
         rec = base_record_get(base_token="bt", table_id="tbl", record_id="rec1")
-        assert rec == {"任务标题": "hi", "阶段": ["📋 选题"]}
+        assert rec == {"任务标题": "hi", "阶段": ["📋 选题"],
+                       "负责 AI": ["cc"], "备注": "x"}
         argv = run_json.call_args.args[0]
         assert argv[:2] == ["base", "+record-get"]
         assert "--base-token" in argv and argv[argv.index("--base-token") + 1] == "bt"
         assert "--table-id" in argv and argv[argv.index("--table-id") + 1] == "tbl"
         assert "--record-id" in argv and argv[argv.index("--record-id") + 1] == "rec1"
         assert "--format" in argv and argv[argv.index("--format") + 1] == "json"
+
+    @patch("feishu_hub.lark_cli.run_json")
+    def test_returns_empty_when_no_rows(self, run_json):
+        run_json.return_value = {
+            "ok": True,
+            "data": {"data": [], "fields": [], "record_id_list": [], "has_more": False},
+        }
+        from feishu_hub.lark_cli import base_record_get
+
+        assert base_record_get(base_token="bt", table_id="tbl", record_id="rec1") == {}
+
+    @patch("feishu_hub.lark_cli.run_json")
+    def test_raises_on_business_code_nonzero(self, run_json):
+        import pytest
+        run_json.return_value = {"code": 91234, "msg": "forbidden", "data": {}}
+        from feishu_hub.lark_cli import base_record_get, LarkCLIError
+
+        with pytest.raises(LarkCLIError) as exc:
+            base_record_get(base_token="bt", table_id="tbl", record_id="rec1")
+        assert exc.value.code == 91234
+        assert "forbidden" in exc.value.msg
 
 
 # --- base_record_upsert ---------------------------------------------------

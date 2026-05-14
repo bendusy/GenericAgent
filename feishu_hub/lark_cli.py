@@ -367,7 +367,14 @@ def base_record_get(
     timeout: int = DEFAULT_TIMEOUT,
     binary: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """``base +record-get --format json``，返回 ``data.record.fields`` 字段映射。"""
+    """``base +record-get --format json``，返回 ``{field_name: value}`` 字段映射。
+
+    实测响应（lark-cli 1.0.29 + 公众号-2026 base, 2026-05-14）是**列式**结构：
+    ``data.data[0]`` = 一行的值数组；``data.fields`` = 平行的列名数组；
+    ``data.record_id_list[0]`` = 行的 record_id。select 字段返回 ``["opt"]``
+    数组形态（与 M4.C 下游 ``rec[name][0]`` 访问一致），text 返回字符串，
+    未填值返回 ``null``。这里 zip 列名 + 行值给上层一个 friendly dict。
+    """
     argv = [
         "base", "+record-get",
         "--base-token", base_token,
@@ -376,8 +383,20 @@ def base_record_get(
         "--format", "json",
     ]
     body = run_json(argv, timeout=timeout, binary=binary)
-    fields = _pluck(body, ("data", "record", "fields"))
-    return fields if isinstance(fields, dict) else {}
+    if isinstance(body, dict):
+        biz_code = body.get("code", 0)
+        if isinstance(biz_code, int) and biz_code != 0:
+            biz_msg = body.get("msg") if isinstance(body.get("msg"), str) else ""
+            raise LarkCLIError(biz_code, biz_msg or "record-get business error",
+                               argv, stdout=json.dumps(body, ensure_ascii=False)[:500])
+    data = (body or {}).get("data") if isinstance(body, dict) else None
+    if not isinstance(data, dict):
+        return {}
+    rows = data.get("data") or []
+    fields = data.get("fields") or []
+    if not rows or not fields:
+        return {}
+    return dict(zip(fields, rows[0]))
 
 
 def base_record_upsert(
