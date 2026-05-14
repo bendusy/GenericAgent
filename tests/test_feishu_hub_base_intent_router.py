@@ -586,6 +586,13 @@ def test_cleanup_swallows_mirror_exception(monkeypatch):
 # ---- Phase 5: try_handle_nl ----
 
 
+def _mock_nl_llm(monkeypatch, response_json: str) -> None:
+    """Replace nl_router._get_llm_caller with a fake returning canned JSON response."""
+    def fake_caller(prompt: str) -> str:
+        return response_json
+    monkeypatch.setattr("feishu_hub.nl_router._get_llm_caller", lambda: fake_caller)
+
+
 def test_try_handle_nl_high_confidence_creates_row_and_calls_try_handle(monkeypatch):
     from feishu_hub.runner_registry import RunnerRegistry
     cfg = BaseConfig(
@@ -610,6 +617,7 @@ def test_try_handle_nl_high_confidence_creates_row_and_calls_try_handle(monkeypa
         reply_fn("已开始处理 [link]")
         return True
 
+    _mock_nl_llm(monkeypatch, '{"role":"公众号-2026","title":"AI 产品设计入门","confidence":0.9,"why":"明确指向公众号"}')
     monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", fake_upsert)
     monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", fake_try_handle)
 
@@ -648,6 +656,7 @@ def test_try_handle_nl_low_confidence_asks_user_no_upsert(monkeypatch):
         upsert_called[0] = True
         return "recX"
 
+    _mock_nl_llm(monkeypatch, '{"role":"公众号-2026","title":"发布一些内容","confidence":0.5,"why":"弱关键词"}')
     monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", fake_upsert)
     monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", lambda *a, **kw: True)
 
@@ -669,6 +678,7 @@ def test_try_handle_nl_no_match_returns_false(monkeypatch):
     )
     registry = RunnerRegistry()
     replies: list[str] = []
+    _mock_nl_llm(monkeypatch, '{"role":null,"title":"","confidence":0.0,"why":"闲聊"}')
     monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", lambda **kw: "recX")
     monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", lambda *a, **kw: True)
 
@@ -693,6 +703,7 @@ def test_try_handle_nl_upsert_failure_reports_to_user(monkeypatch):
     def boom(**kw):
         raise RuntimeError("lark-cli down")
 
+    _mock_nl_llm(monkeypatch, '{"role":"公众号-2026","title":"AI","confidence":0.9}')
     monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", boom)
     monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", lambda *a, **kw: True)
 
@@ -738,6 +749,7 @@ def test_m5a_integration_nl_to_run_fake_event(monkeypatch, tmp_path):
         reply_fn(f"已开始处理 https://feishu.cn/base/{configs[0].base_token}?record={event['content'].split(':')[-1]}")
         return True
 
+    _mock_nl_llm(monkeypatch, '{"role":"公众号-2026","title":"AI 产品设计入门","confidence":0.9,"why":"明确指向公众号"}')
     monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", fake_upsert)
     monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", fake_try_handle)
 
