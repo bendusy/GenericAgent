@@ -114,3 +114,73 @@ stage_to_bot:
     )
     configs = load_all(tmp_path)
     assert configs[0].output_mirror == {}
+
+
+def test_initial_stage_optional_defaults_none(tmp_path: Path) -> None:
+    (tmp_path / "a.yaml").write_text(
+        "role: A\nbase_token: bx\ntable_id: tbl_a\nstage_to_bot:\n  s1: bot_a\n",
+        encoding="utf-8",
+    )
+    configs = load_all(tmp_path)
+    assert configs[0].initial_stage is None
+
+
+def test_initial_stage_read_when_present(tmp_path: Path) -> None:
+    (tmp_path / "a.yaml").write_text(
+        'role: A\nbase_token: bx\ntable_id: tbl_a\n'
+        'stage_to_bot:\n  "📋 选题": bot_a\n'
+        'initial_stage: "📋 选题"\n',
+        encoding="utf-8",
+    )
+    configs = load_all(tmp_path)
+    assert configs[0].initial_stage == "📋 选题"
+
+
+def test_nl_keywords_optional_defaults_none(tmp_path: Path) -> None:
+    (tmp_path / "a.yaml").write_text(
+        "role: A\nbase_token: bx\ntable_id: tbl_a\nstage_to_bot:\n  s1: bot_a\n",
+        encoding="utf-8",
+    )
+    configs = load_all(tmp_path)
+    assert configs[0].nl_keywords is None
+
+
+def test_nl_keywords_parses_strong_weak(tmp_path: Path) -> None:
+    (tmp_path / "a.yaml").write_text(
+        "role: A\nbase_token: bx\ntable_id: tbl_a\n"
+        "stage_to_bot:\n  s1: bot_a\n"
+        "nl_keywords:\n"
+        "  strong: [公众号, 写一篇]\n"
+        "  weak: [内容, 发布]\n",
+        encoding="utf-8",
+    )
+    configs = load_all(tmp_path)
+    kw = configs[0].nl_keywords
+    assert kw is not None
+    assert kw["strong"] == ["公众号", "写一篇"]
+    assert kw["weak"] == ["内容", "发布"]
+
+
+def test_digest_optional_defaults_none(tmp_path: Path) -> None:
+    (tmp_path / "a.yaml").write_text(
+        "role: A\nbase_token: bx\ntable_id: tbl_a\nstage_to_bot:\n  s1: bot_a\n",
+        encoding="utf-8",
+    )
+    configs = load_all(tmp_path)
+    assert configs[0].digest is None
+
+
+def test_digest_parses_decision_stages(tmp_path: Path) -> None:
+    (tmp_path / "a.yaml").write_text(
+        "role: A\nbase_token: bx\ntable_id: tbl_a\n"
+        "stage_to_bot:\n  s1: bot_a\n"
+        "digest:\n"
+        "  decision_stages: [\"📝 修订\", \"✅ 发布\"]\n"
+        "  product_fields: [产物, 关联文档]\n",
+        encoding="utf-8",
+    )
+    configs = load_all(tmp_path)
+    d = configs[0].digest
+    assert d is not None
+    assert d["decision_stages"] == ["📝 修订", "✅ 发布"]
+    assert d["product_fields"] == ["产物", "关联文档"]
