@@ -142,7 +142,13 @@ class RunnerRegistry:
         return max(candidates, key=lambda e: e.started_at)
 
     def lookup_by_record_id(self, record_id: str) -> Optional[RunnerEntry]:
-        """扫 state_dir 找 record_id 匹配的活 entry（M4.C：Base 记录 → runner）。"""
+        """扫 state_dir 找 record_id 匹配的活 entry（M4.C：Base 记录 → runner）。
+
+        注意：``_pid_alive`` 是本机 ``os.kill(pid, 0)``。多机部署下，machine A
+        register 的 runner pid 在 machine B 上不存在，B 调本方法会返回 ``None``，
+        让二次 ``/run`` 通过。多机的并发控制依赖 ``record_writer.cas_acquire_running``
+        的 ``_last_writer_marker`` 字段（飞书侧共享），不靠 registry。
+        """
         for p in self._root.glob("*.json"):
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
