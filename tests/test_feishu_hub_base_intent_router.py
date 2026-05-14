@@ -701,3 +701,53 @@ def test_try_handle_nl_upsert_failure_reports_to_user(monkeypatch):
 
     assert consumed is True
     assert any("建行失败" in r for r in replies)
+
+
+def test_m5a_integration_nl_to_run_fake_event(monkeypatch, tmp_path):
+    """集成 smoke：真 BaseConfig (yaml) + NL 解析 + 自动建行 + fake event → try_handle."""
+    from feishu_hub.runner_registry import RunnerRegistry
+    yaml_path = tmp_path / "公众号.yaml"
+    yaml_path.write_text(
+        "role: 公众号-2026\n"
+        "base_token: K6Y\n"
+        "table_id: tbl_gzh\n"
+        "stage_to_bot:\n"
+        "  \"📋 选题\": selector_bot\n"
+        "initial_stage: \"📋 选题\"\n"
+        "nl_keywords:\n"
+        "  strong: [公众号, 写一篇, 文章]\n"
+        "  weak: [内容, 发布]\n",
+        encoding="utf-8",
+    )
+
+    from feishu_hub.base_config import load_all
+    configs = load_all(tmp_path)
+    assert len(configs) == 1
+
+    registry = RunnerRegistry()
+    replies: list[str] = []
+    upsert_calls: list[dict] = []
+    try_handle_events: list[dict] = []
+
+    def fake_upsert(*, base_token, table_id, fields):
+        upsert_calls.append({"base_token": base_token, "table_id": table_id, "fields": dict(fields)})
+        return "recE2E001"
+
+    def fake_try_handle(event, *, configs, registry, reply_fn):
+        try_handle_events.append(event)
+        reply_fn(f"已开始处理 https://feishu.cn/base/{configs[0].base_token}?record={event['content'].split(':')[-1]}")
+        return True
+
+    monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", fake_upsert)
+    monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", fake_try_handle)
+
+    event = {"message_id": "om_e2e", "chat_id": "oc_e2e",
+             "content": "公众号写一篇 AI 产品设计入门"}
+    consumed = try_handle_nl(event, configs=configs, registry=registry, reply_fn=replies.append)
+
+    assert consumed is True
+    assert upsert_calls[0]["fields"]["任务标题"] == "AI 产品设计入门"
+    assert upsert_calls[0]["fields"]["阶段"] == "📋 选题"
+    assert "公众号-2026 record:recE2E001" in try_handle_events[0]["content"]
+    assert try_handle_events[0]["chat_id"] == "oc_e2e"
+    assert any("已开始处理" in r for r in replies)
