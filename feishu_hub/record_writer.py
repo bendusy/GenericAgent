@@ -58,10 +58,19 @@ def _make_marker() -> str:
 
 
 def cas_acquire_running(*, record_id: str, base_token: str, table_id: str,
-                        propagation_grace_s: float = 0.5) -> Tuple[Optional[str], str]:
+                        propagation_grace_s: float = 2.0) -> Tuple[Optional[str], str]:
     """应用层乐观锁：读→检查 idle→写 running+marker→等→re-get 校验 marker 是我的。
 
     Returns: (marker, status)。status ∈ {"ok", "non_idle", "concurrent_conflict"}.
+
+    propagation_grace_s 实测 (2026-05-14, 公众号-2026 base, lark-cli 1.0.29)：
+    在同一 record 写 text → 轮询 read 同字段，端到端 write→read-back 的 median
+    ≈ 1.6s（min 1.56s, max 1.90s, N=7）。该数据含两次 lark-cli 进程启动 +
+    RPC + JSON 解析开销（每个 get ≈ 250-400ms），真实 server-side 写传播
+    略低，但 1.5s 量级是事实底盘。0.5s 默认会让 single-writer 也常遇到
+    "我刚写的 marker 还没 visible" → 错判 concurrent_conflict。
+    取 2.0s 作上限：> max(1.90s) 同时把 RTT 噪声盖住。需要更紧 SLA 时
+    上层显式传更小值。
     """
     r0 = base_record_get(base_token=base_token, table_id=table_id, record_id=record_id)
     state_list = r0.get(STATE_FIELD) or []
