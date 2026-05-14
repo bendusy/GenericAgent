@@ -2,11 +2,23 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 import pytest
 
 from feishu_hub.base_config import BaseConfig
 from feishu_hub import base_intent_router as bir
+
+
+@dataclass
+class _FakeResult:
+    exit_code: int = 0
+    stdout: str = ""
+    stderr: str = ""
+    stdout_head: str = ""
+    stderr_head: str = ""
+    aborted: bool = False
+    abort_reason: str = ""
 
 
 def _configs():
@@ -95,27 +107,37 @@ def test_try_handle_consumes_run_command_happy_path(monkeypatch, tmp_path):
     monkeypatch.setattr(bir, "cas_acquire_running",
                         lambda **kw: ("marker-abc", "ok"))
     monkeypatch.setattr(bir, "append_product", lambda **kw: None)
+    monkeypatch.setattr(bir, "set_run_state", lambda **kw: None)
 
     dispatch_calls = []
 
     def fake_dispatch(bot_name, prompt, on_pid):
         dispatch_calls.append((bot_name, prompt))
         on_pid(12345)
-        return 12345
+        return _FakeResult(exit_code=0, stdout="hello", stdout_head="hello")
     monkeypatch.setattr(bir, "_dispatch_runner", fake_dispatch)
     monkeypatch.setattr("feishu_hub.runner_registry._pid_alive", lambda pid: True)
 
     registry = RunnerRegistry()
+    registered = []
+    orig_register = registry.register
+
+    def spy_register(entry):
+        registered.append(entry)
+        orig_register(entry)
+    registry.register = spy_register  # type: ignore[method-assign]
+
     replies = []
     event = _make_event("@bot /run 公众号-2026 record:recABC")
     assert bir.try_handle(event, configs=_configs(), registry=registry,
                           reply_fn=replies.append) is True
     assert dispatch_calls and dispatch_calls[0][0] == "selector_bot"
     assert "recABC" in dispatch_calls[0][1]
-    entry = registry.lookup_by_record_id("recABC")
-    assert entry is not None
-    assert entry.runner_pid == 12345
-    assert entry.base_token == "K6abc"
+    # 期间至少 register 过一次（含 _on_pid 重注册到 12345）
+    assert any(e.runner_pid == 12345 for e in registered)
+    assert all(e.base_token == "K6abc" for e in registered)
+    # cleanup 后 registry 应已清空
+    assert registry.lookup_by_record_id("recABC") is None
 
 
 # ---- Cycle 4.4: try_handle reject paths ----
@@ -251,3 +273,172 @@ def test_dispatch_runner_raises_when_bot_unknown(monkeypatch, tmp_path):
     monkeypatch.setattr(bot_role, "load_bots", lambda p: [])
     with pytest.raises(ValueError, match="not found"):
         bir._dispatch_runner("ghost_bot", "x", lambda pid: None)
+
+
+# ---- M4.D-1: cleanup path ----
+
+def _setup_run_env(monkeypatch, tmp_path, *, stage="📋 选题"):
+    """Common boilerplate for try_handle cleanup tests."""
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+    monkeypatch.setattr(bir, "base_record_get",
+                        lambda **kw: {"运行状态": ["idle"], "阶段": [stage], "负责 AI": []})
+    monkeypatch.setattr(bir, "cas_acquire_running",
+                        lambda **kw: ("marker-x", "ok"))
+    monkeypatch.setattr("feishu_hub.runner_registry._pid_alive", lambda pid: True)
+
+
+def _capture_calls(monkeypatch):
+    """Capture set_run_state/append_product calls; return calls dict."""
+    calls = {"state": [], "product": []}
+    monkeypatch.setattr(bir, "set_run_state",
+                        lambda **kw: calls["state"].append(kw))
+    monkeypatch.setattr(bir, "append_product",
+                        lambda **kw: calls["product"].append(kw))
+    return calls
+
+
+def test_try_handle_writes_done_state_on_clean_exit(monkeypatch, tmp_path):
+    from feishu_hub.runner_registry import RunnerRegistry
+    _setup_run_env(monkeypatch, tmp_path)
+    calls = _capture_calls(monkeypatch)
+    monkeypatch.setattr(
+        bir, "_dispatch_runner",
+        lambda b, p, on_pid: _FakeResult(exit_code=0, stdout="hello", stdout_head="hello"),
+    )
+    registry = RunnerRegistry()
+    event = _make_event("/run 公众号-2026 record:recABC")
+    assert bir.try_handle(event, configs=_configs(), registry=registry,
+                          reply_fn=lambda _m: None) is True
+    states = [c["state"] for c in calls["state"]]
+    assert "done" in states
+    tails = [c["text"] for c in calls["product"]]
+    assert any("hello" in t and "完成" in t for t in tails)
+
+
+def test_try_handle_writes_failed_state_on_nonzero_exit(monkeypatch, tmp_path):
+    from feishu_hub.runner_registry import RunnerRegistry
+    _setup_run_env(monkeypatch, tmp_path)
+    calls = _capture_calls(monkeypatch)
+    monkeypatch.setattr(
+        bir, "_dispatch_runner",
+        lambda b, p, on_pid: _FakeResult(exit_code=1, stderr="err", stderr_head="err"),
+    )
+    registry = RunnerRegistry()
+    event = _make_event("/run 公众号-2026 record:recABC")
+    bir.try_handle(event, configs=_configs(), registry=registry,
+                   reply_fn=lambda _m: None)
+    assert any(c["state"] == "failed" for c in calls["state"])
+    assert any("err" in c["text"] and "exit 1" in c["text"] for c in calls["product"])
+
+
+def test_try_handle_writes_aborted_state_on_runresult_aborted(monkeypatch, tmp_path):
+    from feishu_hub.runner_registry import RunnerRegistry
+    _setup_run_env(monkeypatch, tmp_path)
+    calls = _capture_calls(monkeypatch)
+    monkeypatch.setattr(
+        bir, "_dispatch_runner",
+        lambda b, p, on_pid: _FakeResult(aborted=True, abort_reason="user /stop"),
+    )
+    registry = RunnerRegistry()
+    event = _make_event("/run 公众号-2026 record:recABC")
+    bir.try_handle(event, configs=_configs(), registry=registry,
+                   reply_fn=lambda _m: None)
+    assert any(c["state"] == "aborted" for c in calls["state"])
+    assert any("user /stop" in c["text"] for c in calls["product"])
+
+
+def test_try_handle_rolls_back_on_dispatch_raises(monkeypatch, tmp_path):
+    from feishu_hub.runner_registry import RunnerRegistry
+    _setup_run_env(monkeypatch, tmp_path)
+    calls = _capture_calls(monkeypatch)
+
+    def boom(*a, **kw):
+        raise ValueError("dispatch boom")
+    monkeypatch.setattr(bir, "_dispatch_runner", boom)
+
+    registry = RunnerRegistry()
+    replies = []
+    event = _make_event("/run 公众号-2026 record:recABC")
+    bir.try_handle(event, configs=_configs(), registry=registry,
+                   reply_fn=replies.append)
+    assert any(c["state"] == "failed" for c in calls["state"])
+    assert registry.lookup_by_record_id("recABC") is None
+    assert any("回滚" in r for r in replies)
+
+
+def test_try_handle_rolls_back_on_append_product_raises(monkeypatch, tmp_path):
+    from feishu_hub.runner_registry import RunnerRegistry
+    from feishu_hub.lark_cli import LarkCLIError
+
+    _setup_run_env(monkeypatch, tmp_path)
+    state_calls = []
+    product_calls = []
+
+    def fake_state(**kw):
+        state_calls.append(kw)
+
+    raised = {"once": False}
+
+    def fake_append(**kw):
+        # First call (--- bot 启动 ---) raises; cleanup-time call records.
+        if not raised["once"]:
+            raised["once"] = True
+            raise LarkCLIError(1, "base upsert failed", ["lark-cli"], stdout="", stderr="x")
+        product_calls.append(kw)
+
+    monkeypatch.setattr(bir, "set_run_state", fake_state)
+    monkeypatch.setattr(bir, "append_product", fake_append)
+    monkeypatch.setattr(bir, "_dispatch_runner",
+                        lambda b, p, on_pid: pytest.fail("should not dispatch"))
+
+    registry = RunnerRegistry()
+    replies = []
+    event = _make_event("/run 公众号-2026 record:recABC")
+    bir.try_handle(event, configs=_configs(), registry=registry,
+                   reply_fn=replies.append)
+    assert any(c["state"] == "failed" for c in state_calls)
+    assert registry.lookup_by_record_id("recABC") is None
+    assert any("回滚" in r for r in replies)
+
+
+def test_try_handle_unregisters_after_clean_exit(monkeypatch, tmp_path):
+    from feishu_hub.runner_registry import RunnerRegistry
+    _setup_run_env(monkeypatch, tmp_path)
+    _capture_calls(monkeypatch)
+    monkeypatch.setattr(
+        bir, "_dispatch_runner",
+        lambda b, p, on_pid: _FakeResult(exit_code=0, stdout="ok", stdout_head="ok"),
+    )
+    registry = RunnerRegistry()
+    event = _make_event("/run 公众号-2026 record:recABC")
+    bir.try_handle(event, configs=_configs(), registry=registry,
+                   reply_fn=lambda _m: None)
+    assert registry.lookup_by_record_id("recABC") is None
+
+
+def test_cleanup_swallows_set_run_state_errors(monkeypatch, tmp_path):
+    from feishu_hub.runner_registry import RunnerRegistry, RunnerEntry
+
+    monkeypatch.setenv("FEISHU_HUB_HOME", str(tmp_path))
+
+    def boom(**kw):
+        raise RuntimeError("set_run_state boom")
+    monkeypatch.setattr(bir, "set_run_state", boom)
+    monkeypatch.setattr(bir, "append_product", lambda **kw: None)
+
+    registry = RunnerRegistry()
+    entry = RunnerEntry(
+        task_guid="base-recABC", task_url="x",
+        runner_pid=0, bot_app_id="cli_local", chat_id="oc",
+        source_message_id="om", started_at="t",
+        record_id="recABC", base_token="K6abc", table_id="tblXYZ",
+    )
+    registry.register(entry)
+    # Must not raise
+    bir._cleanup_after_runner(
+        entry=entry, bot="selector_bot",
+        result=_FakeResult(exit_code=0, stdout="x", stdout_head="x"),
+        registry=registry, reply_fn=lambda _m: None,
+    )
+    # unregister still ran despite set_run_state failure
+    assert registry.lookup_by_record_id("recABC") is None

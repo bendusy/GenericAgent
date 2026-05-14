@@ -5,14 +5,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Callable, List, Optional, Tuple
 
 from feishu_hub.base_config import BaseConfig, resolve_by_role, resolve_by_base_token
 from feishu_hub.lark_cli import base_record_get
-from feishu_hub.record_writer import append_product, cas_acquire_running
+from feishu_hub.record_writer import append_product, cas_acquire_running, set_run_state
 from feishu_hub.runner_registry import RunnerEntry, RunnerRegistry
+
+_log = logging.getLogger(__name__)
 
 _URL_RE = re.compile(
     r"https?://[\w.-]+/base/(\w+)\?[^\s]*?table=(tbl\w+)[^\s]*?record=(rec\w+)"
@@ -184,8 +187,6 @@ def try_handle(event: dict, *, configs: List[BaseConfig],
         record_id=record_id, base_token=base_token, table_id=table_id,
     )
     registry.register(entry)
-    append_product(record_id=record_id, text=f"--- {bot} 启动 ---",
-                   base_token=base_token, table_id=table_id)
 
     def _on_pid(pid: int) -> None:
         # RunnerEntry is frozen — re-register with updated pid.
@@ -197,5 +198,63 @@ def try_handle(event: dict, *, configs: List[BaseConfig],
         )
         registry.register(updated)
 
-    _dispatch_runner(bot, _build_prompt(bot, rec, record_id), _on_pid)
+    result = None
+    try:
+        append_product(record_id=record_id, text=f"--- {bot} 启动 ---",
+                       base_token=base_token, table_id=table_id)
+        result = _dispatch_runner(bot, _build_prompt(bot, rec, record_id), _on_pid)
+    except Exception:
+        _log.exception("dispatch failed: record=%s bot=%s", record_id, bot)
+        reply_fn(f"runner 启动/执行异常，已回滚 (record={record_id})")
+    finally:
+        _cleanup_after_runner(entry=entry, bot=bot, result=result,
+                              registry=registry, reply_fn=reply_fn)
     return True
+
+
+def _cleanup_after_runner(
+    *, entry: RunnerEntry, bot: str, result: object,
+    registry: RunnerRegistry, reply_fn: Callable[[str], None],
+) -> None:
+    """Write final state + product tail + unregister; never raises.
+
+    ``result`` is :class:`feishu_hub.dispatcher.runners.RunResult`，
+    或 ``None``（dispatch 阶段抛异常的情况）。
+    """
+    record_id = entry.record_id or ""
+    base_token = entry.base_token or ""
+    table_id = entry.table_id or ""
+
+    if result is None:
+        state = "failed"
+        tail = f"--- {bot} 启动失败（dispatch 异常）---"
+    elif getattr(result, "aborted", False):
+        state = "aborted"
+        reason = getattr(result, "abort_reason", "") or ""
+        tail = f"--- {bot} aborted ({reason}) ---"
+    elif getattr(result, "exit_code", 0) == 0:
+        state = "done"
+        head = getattr(result, "stdout_head", "") or getattr(result, "stdout", "")
+        tail = f"--- {bot} 完成 ---\n{head}"
+    else:
+        state = "failed"
+        ec = getattr(result, "exit_code", -1)
+        head = getattr(result, "stderr_head", "") or getattr(result, "stderr", "")
+        tail = f"--- {bot} failed (exit {ec}) ---\n{head}"
+
+    try:
+        set_run_state(record_id=record_id, state=state,
+                      base_token=base_token, table_id=table_id)
+    except Exception:
+        _log.exception("cleanup set_run_state failed: record=%s", record_id)
+
+    try:
+        append_product(record_id=record_id, text=tail,
+                       base_token=base_token, table_id=table_id)
+    except Exception:
+        _log.exception("cleanup append_product failed: record=%s", record_id)
+
+    try:
+        registry.unregister(entry.task_guid)
+    except Exception:
+        _log.exception("cleanup unregister failed: task=%s", entry.task_guid)
