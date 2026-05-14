@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from feishu_hub import base_config
 from feishu_hub.base_config import BaseConfig, load_all, resolve_by_base_token, resolve_by_role
 
 
@@ -184,3 +183,18 @@ def test_digest_parses_decision_stages(tmp_path: Path) -> None:
     assert d is not None
     assert d["decision_stages"] == ["📝 修订", "✅ 发布"]
     assert d["product_fields"] == ["产物", "关联文档"]
+
+
+@pytest.mark.parametrize("yaml_snippet", [
+    "nl_keywords: null\n",
+    "nl_keywords: {}\n",
+    "nl_keywords: not-a-dict\n",
+])
+def test_nl_keywords_degrades_to_none(tmp_path: Path, yaml_snippet: str) -> None:
+    (tmp_path / "a.yaml").write_text(
+        "role: A\nbase_token: bx\ntable_id: tbl_a\n"
+        "stage_to_bot:\n  s1: bot_a\n" + yaml_snippet,
+        encoding="utf-8",
+    )
+    configs = load_all(tmp_path)
+    assert configs[0].nl_keywords is None
