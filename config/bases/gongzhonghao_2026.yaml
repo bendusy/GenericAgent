@@ -11,3 +11,22 @@ stage_to_bot:
 output_mirror:
   drafter_bot: 关联文档
   publisher_bot: 关联文档
+
+initial_stage: "📋 选题"
+
+nl_keywords:
+  strong:
+    - 公众号
+    - 写一篇
+    - 文章
+  weak:
+    - 内容
+    - 发布
+
+digest:
+  decision_stages:
+    - "📝 修订"
+    - "✅ 发布"
+  product_fields:
+    - 产物
+    - 关联文档

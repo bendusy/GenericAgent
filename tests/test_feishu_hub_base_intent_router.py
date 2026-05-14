@@ -8,6 +8,7 @@ import pytest
 
 from feishu_hub.base_config import BaseConfig
 from feishu_hub import base_intent_router as bir
+from feishu_hub.base_intent_router import try_handle_nl
 
 
 @dataclass
@@ -580,3 +581,232 @@ def test_cleanup_swallows_mirror_exception(monkeypatch):
     assert any(c["state"] == "done" for c in state_calls)
     assert len(product_calls) == 1
     assert registry.lookup_by_record_id("recABC") is None
+
+
+# ---- Phase 5: try_handle_nl ----
+
+
+def _mock_nl_llm(monkeypatch, response_json: str) -> None:
+    """Replace nl_router._get_llm_caller with a fake returning canned JSON response."""
+    def fake_caller(prompt: str) -> str:
+        return response_json
+    monkeypatch.setattr("feishu_hub.nl_router._get_llm_caller", lambda: fake_caller)
+
+
+def test_try_handle_nl_high_confidence_creates_row_and_calls_try_handle(monkeypatch):
+    from feishu_hub.runner_registry import RunnerRegistry
+    cfg = BaseConfig(
+        role="公众号-2026", base_token="K6Y", table_id="tbl_gzh",
+        stage_to_bot={"📋 选题": "selector_bot"},
+        initial_stage="📋 选题",
+        nl_keywords={"strong": ["公众号", "写一篇"], "weak": []},
+    )
+    registry = RunnerRegistry()
+    replies: list[str] = []
+
+    upsert_calls: list[dict] = []
+
+    def fake_upsert(*, base_token, table_id, fields):
+        upsert_calls.append({"base_token": base_token, "table_id": table_id, "fields": dict(fields)})
+        return "recNL001"
+
+    try_handle_calls: list[dict] = []
+
+    def fake_try_handle(event, *, configs, registry, reply_fn):
+        try_handle_calls.append({"event": event, "configs": configs})
+        reply_fn("已开始处理 [link]")
+        return True
+
+    _mock_nl_llm(monkeypatch, '{"role":"公众号-2026","title":"AI 产品设计入门","confidence":0.9,"why":"明确指向公众号"}')
+    monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", fake_upsert)
+    monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", fake_try_handle)
+
+    event = {"message_id": "om_x1", "chat_id": "oc_x1",
+             "content": "公众号写一篇 AI 产品设计入门"}
+    consumed = try_handle_nl(event, configs=[cfg], registry=registry, reply_fn=replies.append)
+
+    assert consumed is True
+    assert len(upsert_calls) == 1
+    assert upsert_calls[0]["base_token"] == "K6Y"
+    assert upsert_calls[0]["fields"]["任务标题"] == "AI 产品设计入门"
+    assert upsert_calls[0]["fields"]["阶段"] == "📋 选题"
+    assert upsert_calls[0]["fields"]["运行状态"] == "idle"
+    assert upsert_calls[0]["fields"]["备注"] == "公众号写一篇 AI 产品设计入门"
+    assert len(try_handle_calls) == 1
+    fake_event = try_handle_calls[0]["event"]
+    assert "/run 公众号-2026 record:recNL001" in fake_event["content"]
+    assert fake_event["chat_id"] == "oc_x1"
+    assert "已开始处理 [link]" in replies
+
+
+def test_try_handle_nl_low_confidence_asks_user_no_upsert(monkeypatch):
+    from feishu_hub.runner_registry import RunnerRegistry
+    cfg = BaseConfig(
+        role="公众号-2026", base_token="K6Y", table_id="tbl_gzh",
+        stage_to_bot={"📋 选题": "selector_bot"},
+        initial_stage="📋 选题",
+        nl_keywords={"strong": [], "weak": ["内容", "发布"]},
+    )
+    registry = RunnerRegistry()
+    replies: list[str] = []
+
+    upsert_called = [False]
+
+    def fake_upsert(**kw):
+        upsert_called[0] = True
+        return "recX"
+
+    _mock_nl_llm(monkeypatch, '{"role":"公众号-2026","title":"发布一些内容","confidence":0.5,"why":"弱关键词"}')
+    monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", fake_upsert)
+    monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", lambda *a, **kw: True)
+
+    event = {"content": "发布一些内容"}
+    consumed = try_handle_nl(event, configs=[cfg], registry=registry, reply_fn=replies.append)
+
+    assert consumed is True  # 消费了 event（用追问回复）
+    assert upsert_called[0] is False
+    assert len(replies) == 1
+    assert "确认" in replies[0] or "对吗" in replies[0]
+
+
+def test_try_handle_nl_no_match_returns_false(monkeypatch):
+    """role=null（闲聊） → tried_and_failed=True → 兜底回复 + consumed=True。"""
+    from feishu_hub.runner_registry import RunnerRegistry
+    cfg = BaseConfig(
+        role="公众号-2026", base_token="K6Y", table_id="tbl_gzh",
+        stage_to_bot={"📋 选题": "selector_bot"},
+        nl_keywords={"strong": ["公众号"], "weak": []},
+    )
+    registry = RunnerRegistry()
+    replies: list[str] = []
+    _mock_nl_llm(monkeypatch, '{"role":null,"title":"","confidence":0.0,"why":"闲聊"}')
+    monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", lambda **kw: "recX")
+    monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", lambda *a, **kw: True)
+
+    event = {"content": "天气真好"}
+    consumed = try_handle_nl(event, configs=[cfg], registry=registry, reply_fn=replies.append)
+
+    # role=null → tried_and_failed=True → 回复兜底文案 + consumed=True
+    assert consumed is True
+    assert any("没看懂" in r for r in replies)
+
+
+def test_try_handle_nl_no_nl_keywords_returns_false(monkeypatch):
+    """无 nl_keywords candidates → silent fall-through → consumed=False。"""
+    from feishu_hub.runner_registry import RunnerRegistry
+    cfg = BaseConfig(
+        role="公众号-2026", base_token="K6Y", table_id="tbl_gzh",
+        stage_to_bot={"📋 选题": "selector_bot"},
+        nl_keywords=None,
+    )
+    registry = RunnerRegistry()
+    replies: list[str] = []
+    _mock_nl_llm(monkeypatch, '{"role":null}')
+    monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", lambda **kw: "recX")
+    monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", lambda *a, **kw: True)
+
+    event = {"content": "天气真好"}
+    consumed = try_handle_nl(event, configs=[cfg], registry=registry, reply_fn=replies.append)
+
+    assert consumed is False
+    assert replies == []
+
+
+def test_try_handle_nl_llm_failure_replies_spec_fallback(monkeypatch):
+    """codex Q3: LLM 失败时回复 spec §3 兜底文案，不静默 fall-through。"""
+    from feishu_hub.runner_registry import RunnerRegistry
+    cfg = BaseConfig(
+        role="公众号-2026", base_token="K6Y", table_id="tbl_gzh",
+        stage_to_bot={"📋 选题": "selector_bot"},
+        initial_stage="📋 选题",
+        nl_keywords={"strong": ["公众号", "写一篇"], "weak": []},
+    )
+    registry = RunnerRegistry()
+    replies: list[str] = []
+
+    def fake_caller(prompt: str) -> str:
+        raise RuntimeError("LLM transient error")
+
+    monkeypatch.setattr("feishu_hub.nl_router._get_llm_caller", lambda: fake_caller)
+
+    event = {"content": "公众号写一篇 AI"}
+    consumed = try_handle_nl(event, configs=[cfg], registry=registry, reply_fn=replies.append)
+
+    assert consumed is True
+    assert any("没看懂" in r for r in replies)
+
+
+def test_try_handle_nl_upsert_failure_reports_to_user(monkeypatch):
+    from feishu_hub.runner_registry import RunnerRegistry
+    cfg = BaseConfig(
+        role="公众号-2026", base_token="K6Y", table_id="tbl_gzh",
+        stage_to_bot={"📋 选题": "selector_bot"},
+        initial_stage="📋 选题",
+        nl_keywords={"strong": ["公众号", "写一篇"], "weak": []},
+    )
+    registry = RunnerRegistry()
+    replies: list[str] = []
+
+    def boom(**kw):
+        raise RuntimeError("lark-cli down")
+
+    _mock_nl_llm(monkeypatch, '{"role":"公众号-2026","title":"AI","confidence":0.9}')
+    monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", boom)
+    monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", lambda *a, **kw: True)
+
+    event = {"content": "公众号写一篇 AI"}
+    consumed = try_handle_nl(event, configs=[cfg], registry=registry, reply_fn=replies.append)
+
+    assert consumed is True
+    assert any("建行失败" in r for r in replies)
+
+
+def test_m5a_integration_nl_to_run_fake_event(monkeypatch, tmp_path):
+    """集成 smoke：真 BaseConfig (yaml) + NL 解析 + 自动建行 + fake event → try_handle."""
+    from feishu_hub.runner_registry import RunnerRegistry
+    yaml_path = tmp_path / "公众号.yaml"
+    yaml_path.write_text(
+        "role: 公众号-2026\n"
+        "base_token: K6Y\n"
+        "table_id: tbl_gzh\n"
+        "stage_to_bot:\n"
+        "  \"📋 选题\": selector_bot\n"
+        "initial_stage: \"📋 选题\"\n"
+        "nl_keywords:\n"
+        "  strong: [公众号, 写一篇, 文章]\n"
+        "  weak: [内容, 发布]\n",
+        encoding="utf-8",
+    )
+
+    from feishu_hub.base_config import load_all
+    configs = load_all(tmp_path)
+    assert len(configs) == 1
+
+    registry = RunnerRegistry()
+    replies: list[str] = []
+    upsert_calls: list[dict] = []
+    try_handle_events: list[dict] = []
+
+    def fake_upsert(*, base_token, table_id, fields):
+        upsert_calls.append({"base_token": base_token, "table_id": table_id, "fields": dict(fields)})
+        return "recE2E001"
+
+    def fake_try_handle(event, *, configs, registry, reply_fn):
+        try_handle_events.append(event)
+        reply_fn(f"已开始处理 https://feishu.cn/base/{configs[0].base_token}?record={event['content'].split(':')[-1]}")
+        return True
+
+    _mock_nl_llm(monkeypatch, '{"role":"公众号-2026","title":"AI 产品设计入门","confidence":0.9,"why":"明确指向公众号"}')
+    monkeypatch.setattr("feishu_hub.base_intent_router.base_record_upsert", fake_upsert)
+    monkeypatch.setattr("feishu_hub.base_intent_router.try_handle", fake_try_handle)
+
+    event = {"message_id": "om_e2e", "chat_id": "oc_e2e",
+             "content": "公众号写一篇 AI 产品设计入门"}
+    consumed = try_handle_nl(event, configs=configs, registry=registry, reply_fn=replies.append)
+
+    assert consumed is True
+    assert upsert_calls[0]["fields"]["任务标题"] == "AI 产品设计入门"
+    assert upsert_calls[0]["fields"]["阶段"] == "📋 选题"
+    assert "公众号-2026 record:recE2E001" in try_handle_events[0]["content"]
+    assert try_handle_events[0]["chat_id"] == "oc_e2e"
+    assert any("已开始处理" in r for r in replies)

@@ -59,7 +59,14 @@ def _try_base_intent(event: dict, registry: runner_registry.RunnerRegistry) -> b
             _log.exception("base reply failed: msg=%s", msg_id)
 
     try:
-        return base_intent_router.try_handle(
+        # 1) 先 try /run 显式协议
+        if base_intent_router.try_handle(
+            event, configs=configs, registry=registry, reply_fn=_reply,
+        ):
+            return True
+
+        # 2) fall-through 到 NL parser
+        return base_intent_router.try_handle_nl(
             event, configs=configs, registry=registry, reply_fn=_reply,
         )
     except Exception:
