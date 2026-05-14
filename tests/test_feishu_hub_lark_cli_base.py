@@ -178,20 +178,32 @@ class TestBaseRecordSearch:
 
 class TestBaseRecordList:
     @patch("feishu_hub.lark_cli.run_json")
-    def test_base_record_list_returns_data_dict(self, run_json):
+    def test_parses_columnar_response(self, run_json):
+        """实测响应是列式：data.data 行二维数组 + 平行 fields/record_id_list；
+        helper 内部 zip 成上层期望的 {items: [{record_id, fields}], has_more}。"""
         run_json.return_value = {
-            "code": 0,
+            "ok": True,
             "data": {
-                "items": [{"record_id": "r1", "fields": {"x": 1}}],
+                "data": [["a", ["running"]], ["b", ["idle"]]],
+                "fields": ["任务标题", "运行状态"],
+                "field_id_list": ["fldA", "fldB"],
+                "record_id_list": ["rec1", "rec2"],
                 "has_more": False,
             },
         }
         from feishu_hub.lark_cli import base_record_list
 
         data = base_record_list(base_token="bt", table_id="tbl")
-        assert "items" in data
-        assert data["items"][0]["record_id"] == "r1"
         assert data["has_more"] is False
+        assert len(data["items"]) == 2
+        assert data["items"][0] == {
+            "record_id": "rec1",
+            "fields": {"任务标题": "a", "运行状态": ["running"]},
+        }
+        assert data["items"][1] == {
+            "record_id": "rec2",
+            "fields": {"任务标题": "b", "运行状态": ["idle"]},
+        }
         argv = run_json.call_args.args[0]
         assert argv[:2] == ["base", "+record-list"]
         assert "--base-token" in argv and argv[argv.index("--base-token") + 1] == "bt"
@@ -201,8 +213,25 @@ class TestBaseRecordList:
         assert "--offset" in argv and argv[argv.index("--offset") + 1] == "0"
 
     @patch("feishu_hub.lark_cli.run_json")
+    def test_empty_rows_yields_empty_items(self, run_json):
+        run_json.return_value = {
+            "ok": True,
+            "data": {
+                "data": [], "fields": ["a", "b"],
+                "record_id_list": [], "has_more": False,
+            },
+        }
+        from feishu_hub.lark_cli import base_record_list
+
+        data = base_record_list(base_token="bt", table_id="tbl")
+        assert data == {"items": [], "has_more": False}
+
+    @patch("feishu_hub.lark_cli.run_json")
     def test_base_record_list_passes_view_id_when_given(self, run_json):
-        run_json.return_value = {"code": 0, "data": {"items": [], "has_more": False}}
+        run_json.return_value = {
+            "ok": True,
+            "data": {"data": [], "fields": [], "record_id_list": [], "has_more": False},
+        }
         from feishu_hub.lark_cli import base_record_list
 
         base_record_list(base_token="bt", table_id="tbl", view_id="vwAbc")

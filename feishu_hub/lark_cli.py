@@ -500,7 +500,10 @@ def base_record_list(
     Use this (not ``+record-search``) for structured filtering — pass ``view_id``
     of a pre-filtered view, OR list all + filter in Python.
 
-    返回原始 ``data`` 字典：``{items: [...], has_more: bool, ...}``。
+    实测响应（lark-cli 1.0.29 + 公众号-2026 base, 2026-05-14）是**列式**结构：
+    ``data.data`` = 行值二维数组；``data.fields`` = 平行列名；
+    ``data.record_id_list`` = 平行 record_id。这里 zip 成上层期望的形态：
+    ``{"items": [{"record_id": ..., "fields": {name: val}}, ...], "has_more": bool}``。
     """
     argv: List[str] = [
         "base", "+record-list",
@@ -522,7 +525,18 @@ def base_record_list(
             biz_msg = body.get("msg") if isinstance(body.get("msg"), str) else ""
             raise LarkCLIError(biz_code, biz_msg or "record-list business error",
                                argv, stdout=json.dumps(body, ensure_ascii=False)[:500])
-    return body.get("data", {}) if isinstance(body, dict) else {}
+    data = body.get("data", {}) if isinstance(body, dict) else {}
+    if not isinstance(data, dict):
+        return {"items": [], "has_more": False}
+    rows = data.get("data") or []
+    field_names = data.get("fields") or []
+    rids = data.get("record_id_list") or []
+    items: List[Dict[str, Any]] = []
+    for i, row in enumerate(rows):
+        rec = dict(zip(field_names, row)) if field_names else {}
+        rid = rids[i] if i < len(rids) else ""
+        items.append({"record_id": rid, "fields": rec})
+    return {"items": items, "has_more": bool(data.get("has_more"))}
 
 
 def base_record_delete(
