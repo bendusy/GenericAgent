@@ -128,3 +128,7 @@ assets/boards.json
 
 # Private design docs / plans / specs / notes — 本地保留，不公开（含 base_token / chat_id / app_id 等资源 ID）
 /docs/
+
+# npm artifacts (GA 是 Python 项目，不应该 commit node_modules)
+node_modules/
+package-lock.json

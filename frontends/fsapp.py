@@ -570,7 +570,7 @@ class _TaskCard:
 
 def _make_task_hook(card, done_event, on_final, *, user_input="", open_id="", chat_id=""):
     """飞书任务 hook：每轮 patch 卡片状态；结束触发 on_final(raw) 处理附件 +
-    向 feishu_hub.journal emit ``agent.stop`` envelope（dispatcher 才能反向派活）。"""
+    向 roostery.journal emit ``agent.stop`` envelope（dispatcher 才能反向派活）。"""
     def hook(ctx):
         try:
             if ctx.get('exit_reason'):
@@ -579,9 +579,9 @@ def _make_task_hook(card, done_event, on_final, *, user_input="", open_id="", ch
                 card.done(_display_text(raw))
                 on_final(raw)
                 done_event.set()
-                # +++ fork anchor #3: feishu_hub journal emit
+                # +++ fork anchor #3: roostery journal emit
                 try:
-                    from feishu_hub import journal as _fhub_journal
+                    from roostery import journal as _fhub_journal
                     _fhub_journal.append({
                         "event_type": "agent.stop",
                         "source": "fsapp",
@@ -601,7 +601,7 @@ def _make_task_hook(card, done_event, on_final, *, user_input="", open_id="", ch
                         },
                     })
                 except Exception as _je:
-                    print(f"[fork] feishu_hub journal emit skipped: {_je}", flush=True)
+                    print(f"[fork] roostery journal emit skipped: {_je}", flush=True)
                 # ---
             elif ctx.get('summary'):
                 detail = _build_step_detail(ctx.get('response'), ctx.get('tool_calls') or [])
@@ -636,7 +636,7 @@ def _dispatcher_slash(user_input: str, *, open_id: str, chat_id: str) -> bool:
     except Exception as e:
         print(f"[fork] dispatcher_slash ack send failed: {e}", flush=True)
     try:
-        from feishu_hub import journal as _fhub_journal
+        from roostery import journal as _fhub_journal
         _fhub_journal.append({
             "event_type": "agent.stop",
             "source": "fsapp.slash_shortcut",
@@ -678,7 +678,7 @@ def handle_message(data):
         return
     print(f"收到消息 [{open_id}] ({message.message_type}, {len(image_paths)} images): {user_input[:200]}")
     if message.message_type == "text" and user_input.startswith("/"):
-        # ③ slash 直派短路：把 /xxx 命令交给 feishu_hub.dispatcher（可由 rules.yaml 配置）
+        # ③ slash 直派短路：把 /xxx 命令交给 roostery.dispatcher（可由 rules.yaml 配置）
         # 不进 agent loop，避免「一次对话即完成」的尴尬。
         if _dispatcher_slash(user_input, open_id=open_id, chat_id=chat_id):
             return
