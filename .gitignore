@@ -32,6 +32,7 @@ mykey.py
 tasks/
 
 *.zip
+*.exe
 
 memory/*
 !memory/memory_management_sop.md
@@ -74,6 +75,9 @@ memory/L4_raw_sessions/*
 # Goal Mode SOP
 !memory/goal_mode_sop.md
 
+# Goal Hive Mode SOP
+!memory/goal_hive_sop.md
+
 # Skill Search SOP
 !memory/skill_search/
 !memory/skill_search/**
@@ -94,8 +98,11 @@ memory/L4_raw_sessions/*
 # Memory management
 !memory/memory_cleanup_sop.md
 
-# Upstream merge SOP
-!memory/upstream_merge_sop.md
+# Code Review Principles
+!memory/code_review_principles.md
+
+# Review Mode SOP
+!memory/review_sop.md
 
 # Visual Studio
 .vs/
@@ -105,30 +112,16 @@ sche_tasks/
 # CDP Bridge 密钥配置（首次运行自动生成）
 assets/tmwd_cdp_bridge/config.js
 assets/copilot_proxy.pyw
-# 旧的过宽 log 忽略 (**log.*) 会误捕 feishu_hub/git_log.py 等以 _log 结尾的源码；
-# 收窄到 .log 后缀加任意子扩展（如 app.log.1 / nginx.log.gz）。
-*.log.*
+**log.*
 
 # Reflect (ignore new files, whitelist existing)
 reflect/*
 !reflect/autonomous.py
 !reflect/scheduler.py
 !reflect/agent_team_worker.py
-!reflect/agent_team_worker_robust.py
 !reflect/goal_mode.py
 
 # Universal: never track __pycache__ anywhere
 **/__pycache__/
 
 .claude/
-
-# Runtime data accidentally tracked in 92c24c5; should never be in git
-assets/agent_bbs.db
-assets/boards.json
-
-# Private design docs / plans / specs / notes — 本地保留，不公开（含 base_token / chat_id / app_id 等资源 ID）
-/docs/
-
-# npm artifacts (GA 是 Python 项目，不应该 commit node_modules)
-node_modules/
-package-lock.json

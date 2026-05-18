@@ -20,15 +20,6 @@ def reload_mykeys():
     if mt == _mykey_mtime: return globals().get('mykeys', {}), False
     mk = _load_mykeys(); _mykey_mtime = os.stat(_mykey_path).st_mtime_ns
     print(f'[Info] Load mykeys from {_mykey_path}')
-    # Optional GA_LLM_NOS override: comma-separated session names override every
-    # mixin_config['llm_nos']. Example: GA_LLM_NOS=opus-4-7,sonnet
-    _ga_llm_nos = os.environ.get('GA_LLM_NOS', '').strip()
-    if _ga_llm_nos:
-        _override = [s.strip() for s in _ga_llm_nos.split(',') if s.strip()]
-        for _k, _v in mk.items():
-            if 'mixin' in _k and isinstance(_v, dict) and 'llm_nos' in _v:
-                _v['llm_nos'] = _override
-                print(f'[Info] GA_LLM_NOS override {_k}.llm_nos -> {_override}')
     globals().update(mykeys=mk)
     if mk.get('langfuse_config'):
         try: from plugins import langfuse_tracing
@@ -39,11 +30,11 @@ def __getattr__(name):  # once guard in PEP 562
     if name == 'mykeys': return reload_mykeys()[0]
     raise AttributeError(f"module 'llmcore' has no attribute {name}")
 
-def compress_history_tags(messages, keep_recent=10, max_len=800, force=False):
+def compress_history_tags(messages, keep_recent=10, max_len=800, force=False, interval=5):
     """Compress <thinking>/<tool_use>/<tool_result> tags in older messages to save tokens."""
     compress_history_tags._cd = getattr(compress_history_tags, '_cd', 0) + 1
     if force: compress_history_tags._cd = 0
-    if compress_history_tags._cd % 5 != 0: return messages
+    if compress_history_tags._cd % interval != 0: return messages
     _before = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
     _pats = {tag: re.compile(rf'(<{tag}>)([\s\S]*?)(</{tag}>)') for tag in ('thinking', 'think', 'tool_use', 'tool_result')}
     _hist_pat = re.compile(r'<(history|key_info|earlier_context)>[\s\S]*?</\1>')
@@ -96,19 +87,20 @@ def safeprint(*argv):
     except OSError: pass
 print = safeprint
 
-def trim_messages_history(history, context_win):
-    compress_history_tags(history)
-    cost = sum(len(json.dumps(m, ensure_ascii=False)) for m in history) 
-    print(f'[Debug] Current context: {cost} chars, {len(history)} messages.')
-    if cost > context_win * 3: 
-        compress_history_tags(history, keep_recent=4, force=True)   # trim breaks cache, so compress more btw
-        target = context_win * 3 * 0.6
-        while len(history) > 5 and cost > target:
-            history.pop(0)
-            while history and history[0].get('role') != 'user': history.pop(0)
-            if history and history[0].get('role') == 'user': history[0] = _sanitize_leading_user_msg(history[0])
-            cost = sum(len(json.dumps(m, ensure_ascii=False)) for m in history)
-        print(f'[Debug] Trimmed context, current: {cost} chars, {len(history)} messages.')
+def trim_messages_history(history, sess):
+    cap = sess.context_win * 3
+    target = int(cap * getattr(sess, 'trim_keep_rate', 0.6))
+    def cost(): return sum(len(json.dumps(m, ensure_ascii=False)) for m in history)
+    compress_history_tags(history, interval=getattr(sess, 'cut_msg_interval', 5))
+    print(f'[Debug] Current context: {cost()} chars, {len(history)} messages.')
+    if cost() <= cap: return
+    compress_history_tags(history, keep_recent=4, force=True)
+    if cost() <= target: return
+    while len(history) > 9 and cost() > target:
+        history.pop(0)
+        while history and history[0].get('role') != 'user': history.pop(0)
+        if history and history[0].get('role') == 'user': history[0] = _sanitize_leading_user_msg(history[0])
+    print(f'[Debug] Trimmed context, current: {cost()} chars, {len(history)} messages.')
 
 def auto_make_url(base, path):
     b, p = base.rstrip('/'), path.strip('/')
@@ -305,12 +297,14 @@ def _record_usage(usage, api_mode):
     if not usage: return
     if api_mode == 'responses':
         cached = (usage.get("input_tokens_details") or {}).get("cached_tokens", 0)
-        inp = usage.get("input_tokens", 0)
+        inp = usage.get("input_tokens", 0); out = usage.get("output_tokens", 0)
         print(f"[Cache] input={inp} cached={cached}")
+        if out: print(f"[Output] tokens={out}")
     elif api_mode == 'chat_completions':
         cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
-        inp = usage.get("prompt_tokens", 0)
+        inp = usage.get("prompt_tokens", 0); out = usage.get("completion_tokens", 0)
         print(f"[Cache] input={inp} cached={cached}")
+        if out: print(f"[Output] tokens={out}")
     elif api_mode == 'messages':
         ci, cr, inp = usage.get("cache_creation_input_tokens", 0), usage.get("cache_read_input_tokens", 0), usage.get("input_tokens", 0)
         print(f"[Cache] input={inp} creation={ci} read={cr}")
@@ -381,7 +375,9 @@ def _stream_with_retry(sess, url, headers, payload, parse_fn):
                 gen = parse_fn(r)
                 try:
                     while True: streamed = True; yield next(gen)
-                except StopIteration as e: return e.value or []
+                except StopIteration as e:
+                    if not e.value and not streamed: raise requests.ConnectionError("empty response")
+                    return e.value or []
         except (requests.Timeout, requests.ConnectionError) as e:
             err = f"!!!Error: {type(e).__name__}"
             if attempt < sess.max_retries:
@@ -518,22 +514,14 @@ class BaseSession:
     def __init__(self, cfg):
         self.api_key = cfg['apikey']
         self.api_base = cfg['apibase'].rstrip('/')
-        # Optional local Claude Code disguise proxy. Anthropic-shaped, so only
-        # apply to sessions that speak the Claude wire protocol; everything
-        # else (gpt etc.) keeps its own origin so MixinSession rotation can
-        # route around a dead proxy without mangling non-Claude requests.
-        _ga_claude_proxy_url = os.environ.get('GA_CLAUDE_PROXY_URL', '').strip().rstrip('/')
-        _is_claude = 'claude' in cfg.get('model', '').lower() or 'anthropic' in cfg.get('apibase', '').lower()
-        if _ga_claude_proxy_url and _is_claude:
-            self.api_base = _ga_claude_proxy_url
-            print(f"[Info] GA_CLAUDE_PROXY_URL enabled for {cfg.get('name', cfg.get('model'))}: api_base -> {self.api_base}")
         self.model = cfg.get('model', '')
-        self.context_win = cfg.get('context_win', 28000)
-        self.history = []
-        self.lock = threading.Lock()
-        self.system = ""
+        default_context_win = 30000
+        if 'deepseek' in self.model.lower():
+            default_context_win = 70000; self.cut_msg_interval = 25; self.trim_keep_rate = 0.3
+        self.context_win = cfg.get('context_win', default_context_win)
+        self.history = []; self.lock = threading.Lock(); self.system = ""
         self.name = cfg.get('name', self.model)
-        proxy = cfg.get('proxy')
+        proxy = cfg.get('proxy'); 
         self.proxies = {"http": proxy, "https": proxy} if proxy else None
         self.max_retries = max(0, int(cfg.get('max_retries', 4)))
         self.verify = cfg.get('verify', True)
@@ -568,7 +556,7 @@ class BaseSession:
         def _ask_gen():
             with self.lock:
                 self.history.append({"role": "user", "content": [{"type": "text", "text": prompt}]})
-                trim_messages_history(self.history, self.context_win)
+                trim_messages_history(self.history, self)
                 messages = self.make_messages(self.history)
             content_blocks = None; content = ''
             gen = self.raw_ask(messages)
@@ -653,9 +641,11 @@ class NativeClaudeSession(BaseSession):
         self._device_id = uuid.uuid4().hex + uuid.uuid4().hex[:32]
         self.tools = None
     def raw_ask(self, messages):
-        messages = _ensure_thinking_blocks(_drop_unsigned_thinking(_fix_messages(messages)), self.model)
         if self.max_tokens is None: self.max_tokens = 8192
         model = self.model
+        messages = _fix_messages(messages)
+        if 'claude' in model.lower(): messages = _drop_unsigned_thinking(messages)
+        messages = _ensure_thinking_blocks(messages, self.model)
         beta_parts = ["claude-code-20250219", "interleaved-thinking-2025-05-14", "redact-thinking-2026-02-12", "prompt-caching-scope-2026-01-05"]
         if "[1m]" in model.lower():
             beta_parts.insert(1, "context-1m-2025-08-07"); model = model.replace("[1m]", "").replace("[1M]", "")
@@ -689,7 +679,7 @@ class NativeClaudeSession(BaseSession):
         assert type(msg) is dict
         with self.lock:
             self.history.append(msg)
-            trim_messages_history(self.history, self.context_win)
+            trim_messages_history(self.history, self)
             messages = [{"role": m["role"], "content": list(m["content"])} for m in self.history]
         content_blocks = None
         gen = self.raw_ask(messages)
@@ -922,7 +912,6 @@ class MixinSession:
         for s in self._sessions: s.max_retries = 0
         self._orig_raw_asks = [s.raw_ask for s in self._sessions]
         self._sessions[0].raw_ask = self._raw_ask
-        self.model = getattr(self._sessions[0], 'model', None)
         self._cur_idx, self._switched_at = 0, 0.0
     def __getattr__(self, name): return getattr(self._sessions[0], name)
     _BROADCAST_ATTRS = frozenset({'system', 'tools', 'temperature', 'max_tokens', 'reasoning_effort', 'history'})
@@ -934,6 +923,8 @@ class MixinSession:
         else: object.__setattr__(self, name, value)
     @property
     def primary(self): return self._sessions[0]
+    @property
+    def model(self): return getattr(self._sessions[self._cur_idx], 'model', None)
     def _pick(self):
         if self._cur_idx and time.time() - self._switched_at > self._spring_sec: self._cur_idx = 0
         return self._cur_idx

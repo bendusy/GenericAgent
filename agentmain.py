@@ -14,23 +14,6 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 def load_tool_schema(suffix=''):
     global TOOLS_SCHEMA
     TS = open(os.path.join(script_dir, f'assets/tools_schema{suffix}.json'), 'r', encoding='utf-8').read()
-    # +++ fork anchor #1: merge fork-local schema (if any) and trigger lark_bridge install
-    extra = os.path.join(script_dir, 'assets/tools_schema_local.json')
-    if os.path.exists(extra):
-        try:
-            TS = json.dumps(json.loads(TS) + json.loads(open(extra, encoding='utf-8').read()))
-        except Exception as _e:
-            print(f"[fork] tools_schema_local merge skipped: {_e}", flush=True)
-    # lark_bridge import is unconditional: do_lark_cli setattr is safe even without the local schema (just unadvertised). Full rollback: git checkout agentmain.py.
-    try:
-        import frontends.lark_bridge  # noqa: F401  triggers do_lark_cli injection
-    except Exception as _e:
-        print(f"[fork] lark_bridge load skipped: {_e}", flush=True)
-    try:
-        import frontends.lark_tools_adapter  # noqa: F401  triggers do_daily_report / do_feishu_notify injection
-    except Exception as _e:
-        print(f"[fork] lark_tools_adapter load skipped: {_e}", flush=True)
-    # ---
     TOOLS_SCHEMA = json.loads(TS if os.name == 'nt' else TS.replace('powershell', 'bash'))
 load_tool_schema()
 
@@ -63,8 +46,8 @@ class GenericAgent:
         self.task_dir = None
         self.history = []; self.handler = None; 
         self.task_queue = queue.Queue() 
-        self.is_running = False; self.stop_sig = False
-        self.llm_no = 0;  self.inc_out = False; self.verbose = True
+        self.is_running = False; self.stop_sig = False; self.llm_no = 0;  
+        self.inc_out = False; self.verbose = True; self.show_mode = 'text'
         self.peer_hint = True
         self.log_path = os.path.join(script_dir, f'temp/model_responses/model_responses_{int(time.time()*1e6)%1000000:06d}.txt')
         self.load_llm_sessions()
@@ -160,25 +143,29 @@ class GenericAgent:
                 if ps > 0: handler.working['key_info'] += f'\n[SYSTEM] 此为 {ps} 个对话前设置的key_info，若已在新任务，先更新或清除工作记忆。\n'
             self.handler = handler  # although new handler, the **full** history is in llmclient, so it is full history!
             self.llmclient.log_path = self.log_path
-            gen = agent_runner_loop(self.llmclient, sys_prompt, raw_query, 
-                                handler, TOOLS_SCHEMA, max_turns=70, verbose=self.verbose)
+            gen = agent_runner_loop(self.llmclient, sys_prompt, raw_query, handler, TOOLS_SCHEMA, 
+                                    max_turns=80, verbose=self.verbose, yield_info=True)
             try:
-                full_resp = ""; last_pos = 0
+                full_resp = ""; last_pos = 0; curr_turn = 0; turn_resps = []
                 for chunk in gen:
                     if consume_file(self.task_dir, '_stop'): self.abort() 
                     if self.stop_sig: break
-                    full_resp += chunk
-                    if len(full_resp) - last_pos > 50 or 'LLM Running' in chunk:
-                        display_queue.put({'next': full_resp[last_pos:] if self.inc_out else full_resp, 'source': source})
+                    if isinstance(chunk, dict) and 'turn' in chunk: 
+                        curr_turn = chunk['turn']; turn_resps.append(''); continue
+                    full_resp += chunk;  turn_resps[-1] += chunk
+                    if len(full_resp) - last_pos > 30 or 'LLM Running' in chunk:
+                        display_queue.put({'next': full_resp[last_pos:] if self.inc_out else full_resp, 
+                                           'source': source, 'turn': curr_turn, 'outputs': turn_resps[-2:]})
                         last_pos = len(full_resp)
-                if self.inc_out and last_pos < len(full_resp): display_queue.put({'next': full_resp[last_pos:], 'source': source})
-                if '</summary>' in full_resp: full_resp = full_resp.replace('</summary>', '</summary>\n\n')
-                if '</file_content>' in full_resp: full_resp = re.sub(r'<file_content>\s*(.*?)\s*</file_content>', r'\n````\n<file_content>\n\1\n</file_content>\n````', full_resp, flags=re.DOTALL)                
-                display_queue.put({'done': full_resp, 'source': source})
+                if self.inc_out and last_pos < len(full_resp): display_queue.put({'next': full_resp[last_pos:], 'source': source, 
+                                                                                  'turn': curr_turn, 'outputs': turn_resps[-2:]})
+                #if '</summary>' in full_resp: full_resp = full_resp.replace('</summary>', '</summary>\n\n')
+                #if '</file_content>' in full_resp: full_resp = re.sub(r'<file_content>\s*(.*?)\s*</file_content>', r'\n````\n<file_content>\n\1\n</file_content>\n````', full_resp, flags=re.DOTALL)                
+                display_queue.put({'done': full_resp, 'source': source, 'turn': curr_turn, 'outputs': turn_resps.copy()})
                 self.history = handler.history_info
             except Exception as e:
                 print(f"Backend Error: {format_error(e)}")
-                display_queue.put({'done': full_resp + f'\n```\n{format_error(e)}\n```', 'source': source})
+                display_queue.put({'done': full_resp + f'\n```\n{format_error(e)}\n```', 'source': source, 'turn': curr_turn, 'outputs': turn_resps.copy()})
             finally:
                 if self.stop_sig: print('User aborted the task.')
                 self.is_running = self.stop_sig = False
@@ -278,6 +265,14 @@ if __name__ == '__main__':
         try: import readline
         except Exception: pass
         agent.inc_out = True
+        if sys.stdout.isatty():
+            try: model = agent.get_llm_name(model=True) or '?'
+            except Exception: model = '?'
+            try:
+                sys.stdout.write(f'\x1b[92m✦\x1b[0m \x1b[1mGenericAgent\x1b[0m '
+                                 f'\x1b[90m· cli · model:\x1b[0m {model}\n')
+                sys.stdout.flush()
+            except Exception: pass
         while True:
             q = input('> ').strip()
             if not q: continue
