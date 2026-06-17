@@ -8,11 +8,6 @@ from collections import deque
 LOCK_PORT = 19735
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-PROXY_PORT = int(os.environ.get('PORT', '5678'))
-BBS_PORT = int(os.environ.get('BBS_PORT', '58800'))
-CC_MODEL = os.environ.get('CC_MODEL', 'claude-opus-4-7')
-GA_LLM_NOS = os.environ.get('GA_LLM_NOS', 'opus-4-7,gpt,sonnet,opus-4-6')
-
 
 def acquire_singleton():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -23,28 +18,6 @@ def acquire_singleton():
 def discover_services():
     services = []
     EXCLUDES = {'goal_mode.py', 'chatapp_common.py', 'tuiapp.py'}
-
-    # --- infra: proxy + BBS (与 start_fsapp_with_proxy.sh 对齐) ---
-    proxy_sh = os.path.join(BASE_DIR, 'claude-max-proxy', 'start_proxy.sh')
-    if os.path.isfile(proxy_sh):
-        services.append({
-            'name': 'infra/claude-max-proxy',
-            'cmd': ['bash', proxy_sh],
-            'env': {'PORT': str(PROXY_PORT), 'DRY_RUN': '0', 'CC_MODEL': CC_MODEL},
-        })
-    bbs_py = os.path.join(BASE_DIR, 'assets', 'agent_bbs.py')
-    if os.path.isfile(bbs_py):
-        services.append({
-            'name': 'infra/agent-bbs',
-            'cmd': [sys.executable, 'agent_bbs.py'],
-            'cwd': os.path.join(BASE_DIR, 'assets'),
-        })
-
-    fsapp_env = {
-        'GA_CLAUDE_PROXY_URL': f'http://127.0.0.1:{PROXY_PORT}',
-        'GA_LLM_NOS': GA_LLM_NOS,
-    }
-
     reflect_dir = os.path.join(BASE_DIR, 'reflect')
     if os.path.isdir(reflect_dir):
         for f in sorted(os.listdir(reflect_dir)):
@@ -52,7 +25,6 @@ def discover_services():
                 services.append({
                     'name': 'reflect/' + f,
                     'cmd': [sys.executable, 'agentmain.py', '--reflect', 'reflect/' + f],
-                    'env': dict(fsapp_env),
                 })
     frontends_dir = os.path.join(BASE_DIR, 'frontends')
     if os.path.isdir(frontends_dir):
@@ -60,12 +32,25 @@ def discover_services():
             if 'app' in f and f.endswith('.py') and f not in EXCLUDES:
                 if 'stapp' in f: cmd = [sys.executable, '-m', 'streamlit', 'run', 'frontends/' + f, '--server.headless=true']
                 else: cmd = [sys.executable, 'frontends/' + f]
-                services.append({
-                    'name': 'frontends/' + f,
-                    'cmd': cmd,
-                    'env': dict(fsapp_env) if 'fsapp' in f else {},
-                })
+                services.append({'name': 'frontends/' + f, 'cmd': cmd})
+    _apply_extra_services(services)
     return services
+
+
+def _apply_extra_services(services):
+    # fork-only：私有 service（proxy/bbs）与 env 注入（fsapp 走代理）外置到
+    # hub_extra_services.py，hub.pyw 保持上游原样。文件缺失则纯上游行为。
+    extra_py = os.path.join(BASE_DIR, 'hub_extra_services.py')
+    if not os.path.isfile(extra_py):
+        return
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('hub_extra_services', extra_py)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.apply(services, BASE_DIR)
+    except Exception as e:
+        sys.stderr.write(f'[hub] extra services load failed: {e}\n')
 
 
 class ServiceManager:
