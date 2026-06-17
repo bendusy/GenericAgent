@@ -19,7 +19,15 @@ from continue_cmd import handle_frontend_command, reset_conversation, list_sessi
 from btw_cmd import handle_frontend_command as btw_handle_frontend
 from export_cmd import last_assistant_text, export_to_temp, wrap_for_clipboard
 
-st.set_page_config(page_title="Cowork", layout="wide")
+st.set_page_config(page_title="Cowork", layout="wide", initial_sidebar_state="collapsed")
+
+st.markdown("""
+<style>
+[data-testid="stBottom"]{position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100vw!important;z-index:999;background:var(--background-color,#fff)}
+@media (min-width:768px){[data-testid="stSidebar"][aria-expanded="true"]~div [data-testid="stBottom"]{left:300px!important;width:calc(100vw - 300px)!important}}
+.stMainBlockContainer{padding-bottom:10rem!important}
+</style>
+""", unsafe_allow_html=True)
 
 LANG = os.environ.get('GA_LANG', 'zh')
 if LANG not in ('zh', 'en'): LANG = 'zh'
@@ -75,7 +83,9 @@ def render_sidebar():
     if st.button(T('desktop_pet')):
         kwargs = {'creationflags': 0x08} if sys.platform == 'win32' else {}
         pet_script = os.path.join(script_dir, 'desktop_pet_v2.pyw')
-        if not os.path.exists(pet_script): pet_script = os.path.join(script_dir, 'desktop_pet.pyw')
+        if not os.path.exists(pet_script):
+            st.error("desktop_pet_v2.pyw not found")
+            return
         subprocess.Popen([sys.executable, pet_script], **kwargs)
         def _pet_req(q):
             def _do():
@@ -94,19 +104,23 @@ def render_sidebar():
         st.toast("Desktop pet started")
     
     if LANG == 'zh':
+        if st.button('🎯 给我找点事做'):
+            st.session_state['_inject_prompt'] = '按照自主行动的规划部分，充分分析我的情况，给我生成一批TODO，务必让我感兴趣'
+            st.rerun(scope="app")
         st.divider()
         if st.button("开始空闲自主行动"):
             st.session_state.last_reply_time = int(time.time()) - 1800
-            st.toast("已将上次回复时间设为1800秒前"); st.rerun()
+            st.session_state.autonomous_enabled = True
+            st.toast("已将上次回复时间设为1800秒前，自主行动已激活"); st.rerun(scope="app")
         if st.session_state.autonomous_enabled:
             if st.button("⏸️ 禁止自主行动"):
                 st.session_state.autonomous_enabled = False
-                st.toast("⏸️ 已禁止自主行动"); st.rerun()
+                st.toast("⏸️ 已禁止自主行动"); st.rerun(scope="app")
             st.caption("🟢 自主行动运行中，会在你离开它30分钟后自动进行")
         else:
             if st.button("▶️ 允许自主行动", type="primary"):
                 st.session_state.autonomous_enabled = True
-                st.toast("✅ 已允许自主行动"); st.rerun()
+                st.toast("✅ 已允许自主行动"); st.rerun(scope="app")
             st.caption("🔴 自主行动已停止")
 with st.sidebar: render_sidebar()
 
@@ -151,11 +165,7 @@ def render_segments(segments, suffix=''):
         if seg['type'] == 'fold':
             with st.expander(seg['title'], expanded=False): st.markdown(seg['content'])
         else:
-            # Strip <summary> meta tags from text segments — folded turns already
-            # promote them to expander titles; for the first/last segments
-            # they'd otherwise leak into the chat as raw text (esp. after /continue
-            # restores a multi-turn body).
-            st.markdown(_SUMMARY_TAG_RE.sub('', seg['content']) + suffix)
+            st.markdown(seg['content'] + suffix)
 
 def agent_backend_stream(prompt=None):
     """Drain main task display_queue.
@@ -233,17 +243,6 @@ try:
     _embed_html = lambda html, **kw: _st_iframe(html, **{k: max(v, 1) if isinstance(v, int) else v for k, v in kw.items()})
 except (ImportError, AttributeError):
     from streamlit.components.v1 import html as _embed_html  # ≤1.55
-_js_scroll_fix = (
-    "!function(){var p=window.parent;if(p.__sfx2)return;p.__sfx2=1;var d=p.document;"
-    "function f(){var m=d.querySelector('section.main');if(!m)return;"
-    "var s=m.scrollTop;m.style.minHeight=m.scrollHeight+1+'px';void m.offsetHeight;"
-    "m.style.minHeight='';void m.offsetHeight;m.scrollTop=s}"
-    "d.addEventListener('transitionend',function(e){"
-    "e.target.closest&&e.target.closest('details')&&setTimeout(f,60)},!0);"
-    "new MutationObserver(function(){setTimeout(f,80)})"
-    ".observe(d.body,{subtree:1,attributes:1,attributeFilter:['open']});"
-    "setInterval(f,5000)}()"
-)
 # IME composition fix (macOS only) - prevents Enter from submitting during CJK input
 _js_ime_fix = ("" if os.name == 'nt' else
     "!function(){if(window.parent.__imeFix)return;window.parent.__imeFix=1;"
@@ -255,9 +254,11 @@ _js_ime_fix = ("" if os.name == 'nt' else
     "e.key==='Enter'&&!e.shiftKey&&(e.isComposing||c||e.keyCode===229)&&"
     "(e.stopImmediatePropagation(),e.preventDefault())},!0))})}"
     "f();new MutationObserver(f).observe(d.body,{childList:1,subtree:1})}()")
-_embed_html(f'<script>{_js_scroll_fix};{_js_ime_fix}</script>', height=0)
+_embed_html(f'<script>{_js_ime_fix}</script>', height=0)
 
-if prompt := st.chat_input("any task?"):
+_injected = st.session_state.pop('_inject_prompt', None)
+prompt = st.chat_input("any task?") or _injected
+if prompt:
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     cmd = (prompt or "").strip()
     def _reset_and_rerun():
