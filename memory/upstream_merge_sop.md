@@ -67,8 +67,19 @@ done
 !reflect/goal_mode.py                   # upstream 新增
 ```
 
-### `hub.pyw` discover_services
-保留两边：fork 的 proxy_sh / bbs_py / fsapp_env 启动块 **且** 上游的 `EXCLUDES = {'goal_mode.py', 'chatapp_common.py', 'tuiapp.py'}`。
+### `hub.pyw`（2026-06-17 起：私有逻辑已外置，hub.pyw 跟随上游）
+**不再内联私有块**。hub.pyw 用上游原样 + 3 处最小 hook：`discover_services()` 末尾调
+`_apply_extra_services()`、`start()` 加可选 `env_overrides`/`cwd`、`_toggle` 传参。
+私有 proxy/bbs/fsapp 注入全在 **`hub_extra_services.py`**（fork-only，入库）。
+- 合并时 hub.pyw 若冲突：直接 `git checkout upstream/main -- hub.pyw`，再补回那 3 处 hook（diff 仅 +24/-3）。
+- `hub_extra_services.py` 是 fork 独有文件，上游永远不会动它，**零冲突**。
+- 缺失外置文件时 hub.pyw = 纯上游行为（静默退化）。
+
+### 关键事实：生产链路不走 hub.pyw
+飞书 fsapp 生产路径是 **launchd → `start_fsapp_with_proxy.sh` → `frontends/fsapp.py`**，
+不经 hub.pyw（GUI launcher 仅手动维护用）。改 hub.pyw 不影响生产。
+代理注入两处对齐（PORT=5678 / BBS_PORT=58800）：`start_fsapp_with_proxy.sh`（生产）
+和 `hub_extra_services.py`（维护启动器）。改其一记得同步另一处。
 
 ## 常见雷区
 
@@ -78,6 +89,8 @@ done
 | rebase 一直冲突 | 把上游提交也当本地 | abort，改用 merge |
 | stash pop 冲突 | 本地脏改动撞到 upstream 同区域 | 手动合并 → 单独 commit |
 | `assets/agent_bbs.db` 未跟踪 | BBS 运行时产物 | 加 `.gitignore`，**不要提交** |
+| `.lto/` / `.codegraph/` 未跟踪 | LTO run state / CodeGraph 索引 | 已在 `.gitignore`，本地产物不提交 |
+| `feishu_hub/` 空目录 | 已迁到 `bendusy/roostery` 独立仓 | 正常，本仓不再含 feishu_hub 源码 |
 
 ## Commit message 约定
 
