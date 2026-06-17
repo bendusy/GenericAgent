@@ -161,5 +161,9 @@ assets/boards.json
 node_modules/
 package-lock.json
 
+# Local-only machine artifacts: LTO run state + CodeGraph index
+.lto/
+.codegraph/
+
 # Project Mode SOP
 !memory/project_mode_sop.md
