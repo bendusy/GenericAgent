@@ -21,9 +21,9 @@ for _k in ('HTTPS_PROXY', 'https_proxy'):
 API = 'https://ilinkai.weixin.qq.com'
 TOKEN_FILE = Path.home() / '.wxbot' / 'token.json'
 TOKEN_FILE.parent.mkdir(exist_ok=True)
-VER, MSG_USER, MSG_BOT, ITEM_TEXT, STATE_FINISH = '2.1.10', 1, 2, 1, 2
+VER, MSG_USER, MSG_BOT, ITEM_TEXT, STATE_FINISH = '2.1.190', 1, 2, 1, 2
 ILINK_APP_ID = 'bot'
-ILINK_APP_CLIENT_VERSION = (2 << 16) | (1 << 8) | 10
+ILINK_APP_CLIENT_VERSION = (2 << 16) | (1 << 8) | 190
 UA = f'openclaw-weixin/{VER}'
 ITEM_IMAGE, ITEM_FILE, ITEM_VIDEO = 2, 4, 5
 CDN_BASE = 'https://novac2c.cdn.weixin.qq.com/c2c'
