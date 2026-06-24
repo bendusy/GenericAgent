@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# Launch claude-max-proxy + agent_bbs in background, then fsapp in foreground.
-# On exit / Ctrl+C / SIGTERM the trap reaps all children.
+# Launch agent_bbs in background, then fsapp in foreground.
+# claude-max-proxy is NOT started here — it is owned solely by the
+# com.genericagent.claudemaxproxy launchd agent (single source, no :5678 race).
+# This script only preflight-checks that the proxy is already listening.
+# On exit / Ctrl+C / SIGTERM the trap reaps BBS (never the launchd-owned proxy).
 set -euo pipefail
 cd "$(dirname "$0")"
 
 : "${PORT:=5678}"
-: "${DRY_RUN:=0}"
-: "${CC_MODEL:=claude-opus-4-7}"
 : "${BBS_PORT:=58800}"
 : "${BBS_ENABLE:=1}"
-LOG="/tmp/claude-proxy.log"
 BBS_LOG="/tmp/agent-bbs.log"
 
-PROXY_PID=""
 BBS_PID=""
 
 # Portable kill: macOS xargs has no -r; guard manually.
@@ -27,24 +26,21 @@ cleanup() {
   local rc=$?
   echo
   echo "[launcher] cleanup (rc=$rc)"
-  # Prefer PID-based kill (covers nohup'd children whose port isn't yet open).
-  [[ -n "$PROXY_PID" ]] && kill "$PROXY_PID" 2>/dev/null || true
-  [[ -n "$BBS_PID"   ]] && kill "$BBS_PID"   2>/dev/null || true
-  # Belt-and-suspenders: also clear listening sockets in case PIDs drifted.
-  kill_port "$PORT"
+  # Only reap BBS. The proxy is launchd-owned; never touch :$PORT here.
+  [[ -n "$BBS_PID" ]] && kill "$BBS_PID" 2>/dev/null || true
   [[ "$BBS_ENABLE" = "1" ]] && kill_port "$BBS_PORT"
   sleep 0.3
-  kill_port "$PORT" KILL
   [[ "$BBS_ENABLE" = "1" ]] && kill_port "$BBS_PORT" KILL
 }
 trap cleanup EXIT INT TERM
 
-# --- preflight: clear stale listeners before starting our own ---
-if lsof -iTCP:"$PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-  echo "[launcher] port $PORT busy; killing stale proxy"
-  kill_port "$PORT"; sleep 1
-  kill_port "$PORT" KILL; sleep 1
+# --- preflight: proxy must already be provided by the claudemaxproxy launchd agent ---
+if ! curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
+  echo "[launcher] ERROR: claude-max-proxy not listening on :$PORT" >&2
+  echo "[launcher]   start it: launchctl kickstart -k gui/\$(id -u)/com.genericagent.claudemaxproxy" >&2
+  exit 1
 fi
+echo "[launcher] proxy up: $(curl -s http://127.0.0.1:$PORT/)"
 
 if pgrep -f "frontends/fsapp.py" >/dev/null 2>&1; then
   echo "[launcher] killing stale fsapp.py"
@@ -52,22 +48,6 @@ if pgrep -f "frontends/fsapp.py" >/dev/null 2>&1; then
   sleep 1
   pkill -9 -f "frontends/fsapp.py" 2>/dev/null || true
 fi
-
-# --- proxy ---
-echo "[launcher] starting proxy (PORT=$PORT DRY_RUN=$DRY_RUN CC_MODEL=$CC_MODEL) -> $LOG"
-PORT="$PORT" DRY_RUN="$DRY_RUN" CC_MODEL="$CC_MODEL" \
-  nohup ./claude-max-proxy/start_proxy.sh > "$LOG" 2>&1 &
-PROXY_PID=$!
-
-for _ in $(seq 1 15); do
-  curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break
-  sleep 1
-done
-if ! curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
-  echo "[launcher] proxy failed to come up; see $LOG" >&2
-  exit 1
-fi
-echo "[launcher] proxy up: $(curl -s http://127.0.0.1:$PORT/)"
 
 # --- BBS (optional) ---
 if [[ "$BBS_ENABLE" = "1" ]]; then
@@ -102,12 +82,10 @@ if [[ "$BBS_ENABLE" = "1" ]]; then
 fi
 
 # --- fsapp (foreground; trap fires when it exits) ---
+# LLM 链真源 = mykey.py mixin_config['llm_nos']（agentmain 直读）。
+# 不再注入 GA_LLM_NOS / GA_CLAUDE_PROXY_URL —— fsapp 不消费，是死环变。
 echo "[launcher] launching fsapp (Ctrl+C to stop all)"
 echo "----------------------------------------------------------------"
 
-: "${GA_LLM_NOS:=opus-4-7,gpt,sonnet,opus-4-6}"
-echo "[launcher] GA_LLM_NOS=$GA_LLM_NOS"
-
-# NOTE: no `exec` — keep bash alive so the trap can reap proxy + BBS on exit.
-GA_CLAUDE_PROXY_URL="http://127.0.0.1:$PORT" GA_LLM_NOS="$GA_LLM_NOS" \
-  python3 frontends/fsapp.py
+# NOTE: no `exec` — keep bash alive so the trap can reap BBS on exit.
+python3 frontends/fsapp.py

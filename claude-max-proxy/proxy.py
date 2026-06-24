@@ -32,7 +32,9 @@ KEYCHAIN_SERVICE = os.environ.get("CLAUDE_KEYCHAIN_SERVICE", "Claude Code-creden
 
 
 def _load_claude_max_token() -> Optional[str]:
-    """Read Claude Code OAuth access token from macOS Keychain. Returns None on any failure."""
+    """Read a *non-expired* Claude Code OAuth access token from macOS Keychain.
+    Returns None on any failure OR when the stored token is already expired —
+    callers then fall back to passthrough instead of forwarding a dead token."""
     try:
         out = subprocess.run(
             ["security", "find-generic-password", "-a", os.environ.get("USER", ""), "-s", KEYCHAIN_SERVICE, "-w"],
@@ -45,10 +47,29 @@ def _load_claude_max_token() -> Optional[str]:
         exp = data.get("claudeAiOauth", {}).get("expiresAt")
         if tok and isinstance(exp, (int, float)) and exp / 1000 < time.time():
             print("[claude-max-proxy] WARN: keychain token expired; refresh via `claude` first", flush=True)
+            return None
         return tok or None
     except Exception as e:
         print(f"[claude-max-proxy] keychain read failed: {e}", flush=True)
         return None
+
+
+# Token cache with short TTL so a `claude` refresh is picked up within ~60s
+# without restarting the proxy (critical when run persistently under launchd).
+_TOKEN_CACHE: Dict[str, Any] = {"tok": None, "at": 0.0}
+_TOKEN_TTL = float(os.environ.get("CLAUDE_TOKEN_TTL", "60"))
+
+
+def _get_claude_max_token() -> Optional[str]:
+    """Return a fresh OAuth token, re-reading Keychain at most once per TTL window."""
+    if not USE_CLAUDE_MAX:
+        return None
+    now = time.time()
+    if _TOKEN_CACHE["tok"] and now - _TOKEN_CACHE["at"] < _TOKEN_TTL:
+        return _TOKEN_CACHE["tok"]
+    tok = _load_claude_max_token()
+    _TOKEN_CACHE["tok"], _TOKEN_CACHE["at"] = tok, now
+    return tok
 
 
 CLAUDE_MAX_TOKEN = _load_claude_max_token() if USE_CLAUDE_MAX else None
@@ -226,7 +247,7 @@ def _remap_obj(obj: Any, direction: str):
 def _normalize_body(body: dict) -> dict:
     body = json.loads(json.dumps(body, ensure_ascii=False))
     inbound_system = body.get("system")
-    body["model"] = os.environ.get("CC_MODEL", "claude-opus-4-6")
+    body["model"] = os.environ.get("CC_MODEL", "claude-opus-4-8")
     body["max_tokens"] = int(os.environ.get("CC_MAX_TOKENS", "64000"))
     body.setdefault("stream", True)
     # CC-specific request shape; opt-in because OAuth Claude Max auth currently
@@ -285,9 +306,10 @@ def _build_headers(in_headers, final_body_bytes: bytes):
         "X-Stainless-Arch": TRUE_CC_HEADERS.get("X-Stainless-Arch") or TRUE_CC_HEADERS.get("x-stainless-arch") or "arm64",
         "X-Stainless-Runtime": TRUE_CC_HEADERS.get("X-Stainless-Runtime") or TRUE_CC_HEADERS.get("x-stainless-runtime") or "node",
     }
-    if CLAUDE_MAX_TOKEN:
+    _tok = _get_claude_max_token()
+    if _tok:
         # Override inbound credentials with Claude Max OAuth token from Keychain.
-        h["authorization"] = f"Bearer {CLAUDE_MAX_TOKEN}"
+        h["authorization"] = f"Bearer {_tok}"
     else:
         if in_headers.get("x-api-key"): h["x-api-key"] = in_headers.get("x-api-key")
         if in_headers.get("authorization"): h["authorization"] = in_headers.get("authorization")
@@ -317,7 +339,7 @@ def _remap_sse_lines(lines: Iterable[bytes]):
 
 @app.get("/")
 def home():
-    return jsonify({"ok": True, "service": "claude-max-proxy", "port": PORT, "upstream": UPSTREAM, "dry_run": DRY_RUN, "session_id": SESSION_ID, "auth": "keychain-oauth" if CLAUDE_MAX_TOKEN else "passthrough"})
+    return jsonify({"ok": True, "service": "claude-max-proxy", "port": PORT, "upstream": UPSTREAM, "dry_run": DRY_RUN, "session_id": SESSION_ID, "auth": "keychain-oauth" if _get_claude_max_token() else "passthrough"})
 
 @app.post("/v1/messages")
 @app.post("/messages")
